@@ -37,7 +37,7 @@ app.use(passport.initialize());
 // users routes
 // ✅ Cách đúng: Test API trả về chuỗi "Hello World"
 app.get('/', (req, res) => {
-  res.send('✅ Hello World from Render!');
+  res.send('✅ Grand Hotel from Render!');
 });
 
 const authRoutes = require('./routes/auth.routes');   // authRoutes phải gọi sau .env
