@@ -1,9 +1,10 @@
 const User = require('../models/user.model');
+const Otp = require('../models/otp.model');
 const PendingUser = require('../models/pendingUser.model');
 const { generateAccessToken, generateRefreshToken } = require('../utils/generateToken');
 const jwt = require('jsonwebtoken');
 const { generateOTP } = require('../utils/generateOTP');
-const { sendOTPEmail } = require('../services/email.service');
+const { sendOTPEmail, sendResetPasswordEmail } = require('../services/email.service');
 const bcrypt = require('bcryptjs');
 
 // Đăng ký
@@ -161,6 +162,7 @@ exports.refreshAccessToken = async (req, res) => {
   }
 };
 
+
 // Logout
 exports.logout = async (req, res) => {
   try {
@@ -169,5 +171,85 @@ exports.logout = async (req, res) => {
     res.json({ message: 'Đăng xuất thành công' });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+};
+
+
+// Quên mật khẩu (gửi OTP qua email)
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: 'Vui lòng cung cấp email' });
+    }
+
+    // Kiểm tra email có tồn tại không
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'Không tìm thấy tài khoản với email này' });
+    }
+
+    // Tạo OTP
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút
+
+    // Xóa OTP cũ và lưu OTP mới
+    await Otp.deleteMany({ email });
+    await Otp.create({ email, otp, expiresAt });
+
+    // Gửi OTP qua email
+    await sendResetPasswordEmail(email, otp);
+
+    res.status(200).json({ message: 'Mã OTP đã được gửi đến email của bạn' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
+  }
+};
+
+// Đặt lại mật khẩu bằng OTP
+// Đặt lại mật khẩu bằng OTP
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword, reNewPassword } = req.body;
+
+    // Kiểm tra thiếu dữ liệu
+    if (!email || !otp || !newPassword || !reNewPassword) {
+      return res.status(400).json({ message: 'Vui lòng cung cấp đầy đủ thông tin' });
+    }
+    
+    // Kiểm tra hai mật khẩu có khớp nhau không
+    if (newPassword !== reNewPassword) {
+      return res.status(400).json({ message: 'Mật khẩu xác nhận không khớp' });
+    }
+
+    // Tìm OTP trong database
+    const otpRecord = await Otp.findOne({ email, otp });
+    if (!otpRecord) {
+      return res.status(400).json({ message: 'OTP không đúng hoặc email chưa yêu cầu khôi phục mật khẩu' });
+    }
+
+    // Kiểm tra OTP còn hạn sử dụng không
+    if (otpRecord.expiresAt < new Date()) {
+      await Otp.deleteMany({ email });
+      return res.status(400).json({ message: 'Mã OTP đã hết hạn' });
+    }
+
+    // Tìm user và cập nhật mật khẩu
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'Không tìm thấy người dùng' });
+    }
+
+    // Cập nhật mật khẩu
+    user.password = newPassword; // Mật khẩu sẽ được hash trong pre-save hook
+    await user.save();
+
+    // Xóa OTP sau khi đã sử dụng
+    await Otp.deleteMany({ email });
+
+    res.status(200).json({ message: 'Đặt lại mật khẩu thành công' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
   }
 };

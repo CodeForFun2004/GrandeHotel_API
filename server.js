@@ -23,7 +23,7 @@ const passwordRoutes = require('./routes/password.routes');
 const app = express();
 // Configure CORS explicitly
 app.use(cors({
-  origin: ['http://localhost:8080', 'http://10.0.2.2:8080', 'http://10.0.2.2'], // Allow emulator and local origins
+  origin: ['http://localhost:5173', 'http://10.0.2.2:8080', 'http://10.0.2.2'], // Allow emulator and local origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Explicitly allow methods
   allowedHeaders: ['Content-Type', 'Authorization'], // Allow Authorization header
 }));
