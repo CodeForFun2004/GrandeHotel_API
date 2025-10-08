@@ -100,6 +100,12 @@ exports.updateUser = async (req, res) => {
       updates.password = await bcrypt.hash(updates.password, salt);
     }
 
+    // Nếu có birthday (chuỗi ISO hoặc yyyy-mm-dd) → convert sang Date
+    if (updates.birthday) {
+      updates.birthday = new Date(updates.birthday);
+    }
+
+    // Gán lại các giá trị mới
     Object.assign(user, updates);
     const updatedUser = await user.save();
 
@@ -110,8 +116,13 @@ exports.updateUser = async (req, res) => {
         username: updatedUser.username,
         fullname: updatedUser.fullname,
         email: updatedUser.email,
-        role: updatedUser.role,
-        avatar: updatedUser.avatar
+        phone: updatedUser.phone,
+        avatar: updatedUser.avatar,
+        gender: updatedUser.gender,
+        birthday: updatedUser.birthday,
+        country: updatedUser.country,
+        address: updatedUser.address,
+        role: updatedUser.role
       }
     });
   } catch (err) {

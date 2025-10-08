@@ -9,7 +9,9 @@ const {
   verifyRegister,
   login,
   refreshAccessToken,
-  logout
+  logout,
+  forgotPassword,
+  resetPassword
 } = require('../controllers/auth.controller');
 const { protect } = require('../middlewares/auth.middleware');
 
@@ -37,37 +39,42 @@ router.get(
 // ✅ Callback sau khi Google xác thực
 router.get(
   '/google/callback',
-  passport.authenticate('google', {
-    session: false,
-    failureRedirect: '/login',
-  }),
+  passport.authenticate('google', { session: false, failureRedirect: "http://localhost:5173/login?error=google" }),
   async (req, res) => {
     try {
+      const { generateAccessToken, generateRefreshToken } = require('../utils/generateToken');
+
+      // req.user do passport-google đã upsert xong
       const accessToken = generateAccessToken(req.user);
       const refreshToken = generateRefreshToken(req.user);
 
+      // lưu refresh token vào DB user
       req.user.refreshToken = refreshToken;
       await req.user.save();
 
-      res.json({
-        message: 'Đăng nhập Google thành công',
+      // Tạo payload nhẹ gọn (chỉ field cần hiển thị nhanh)
+      const payload = {
         accessToken,
         refreshToken,
         user: {
           id: req.user._id,
           email: req.user.email,
-          fullname: req.user.fullname, // ✅ lấy từ req.user
           username: req.user.username,
           avatar: req.user.avatar,
         },
-      });
-    } catch (error) {
-      console.error('Google login error:', error);
-      res.status(500).json({ message: 'Lỗi đăng nhập bằng Google' });
+      };
+
+      // chuyển payload qua hash để tránh ghi log query
+      const encoded = encodeURIComponent(JSON.stringify(payload));
+     // const fe = process.env.FRONTEND_URL; // ví dụ: http://localhost:5173 hoặc https://your-fe-domain
+     const fe = "http://localhost:5173";
+      return res.redirect(`${fe}/auth/callback#data=${encoded}`);
+    } catch (err) {
+      console.error('Google callback error:', err);
+      return res.redirect(process.env.FRONTEND_URL + '/login?error=google');
     }
   }
 );
-
 
 
 // Test UI
@@ -89,6 +96,16 @@ router.get(
 //   }
 // );
 
+
+// @route   POST /api/password/forgot
+// @desc    Gửi OTP qua email để khôi phục mật khẩu
+// @access  Public
+router.post('/forgot-password', forgotPassword);
+
+// @route   POST /api/password/reset
+// @desc    Đặt lại mật khẩu bằng OTP
+// @access  Public
+router.post('/reset-password', resetPassword);
 
 
 

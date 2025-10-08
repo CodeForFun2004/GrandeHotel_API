@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   fullname: { type: String, required: true },
@@ -11,30 +10,42 @@ const userSchema = new mongoose.Schema({
   avatar: { type: String },
   address: { type: String },
 
+  // ✅ Thêm các trường mới
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other'],
+    default: 'other'
+  },
+  birthday: {
+    type: Date,
+    default: null
+  },
+  country: {
+    type: String,
+    default: null
+  },
+
   role: {
     type: String,
     enum: ['customer', 'admin', 'staff', 'hotel-manager'],
     default: 'customer'
   },
 
-
-
   isBanned: {
     type: Boolean,
     default: false
   },
 
-  // Thêm trường lưu lý do khóa
+  // Lý do khóa
   banReason: {
     type: String,
     default: null
   },
 
-  // Thêm trường lưu thời gian hết hạn tạm ngưng
+  // Thời gian hết hạn khóa tạm
   banExpires: {
     type: Date,
     default: null
-    // Optional, để null nếu khóa vĩnh viễn
   },
 
   googleId: { type: String },
@@ -48,16 +59,13 @@ const userSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
-
 // ✅ Hash password before saving
 userSchema.pre('save', async function (next) {
   try {
-    // Hash password nếu có
     if (this.isModified('password') && this.password) {
       const salt = await bcrypt.genSalt(10);
       this.password = await bcrypt.hash(this.password, salt);
     }
-
     next();
   } catch (err) {
     next(err);

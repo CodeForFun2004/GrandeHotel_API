@@ -17,7 +17,7 @@ exports.sendOTPEmail = async (email, otpCode) => {
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 10px; padding: 30px; background-color: #f9f9f9;">
         <div style="text-align: center;">
-          <img src="https://res.cloudinary.com/dgyb5zpqr/image/upload/v1751275465/splash-logo5_jtqk7w.png" alt="Grand Hotel" width="100" style="margin-bottom: 20px;" />
+          <img src="https://res.cloudinary.com/dgyb5zpqr/image/upload/v1758696030/grand2_ylwp6w.jpg" alt="Grand Hotel" width="100" style="margin-bottom: 20px;" />
           <h2 style="color: #6b4f4f;">Verify Your Account</h2>
         </div>
         <p style="font-size: 16px; color: #333;">
@@ -51,7 +51,7 @@ exports.sendResetPasswordEmail = async (email, otpCode) => {
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 10px; padding: 30px; background-color: #f9f9f9;">
         <div style="text-align: center;">
-          <img src="https://res.cloudinary.com/dgyb5zpqr/image/upload/v1751275465/splash-logo5_jtqk7w.png" alt="Grand Hotel" width="100" style="margin-bottom: 20px;" />
+          <img src="https://res.cloudinary.com/dgyb5zpqr/image/upload/v1758696030/grand2_ylwp6w.jpg" alt="Grand Hotel" width="100" style="margin-bottom: 20px;" />
           <h2 style="color: #6b4f4f;">Reset Your Password</h2>
         </div>
         <p style="font-size: 16px; color: #333;">
