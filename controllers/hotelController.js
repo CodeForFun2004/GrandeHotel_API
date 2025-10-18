@@ -72,14 +72,39 @@ exports.deleteHotel = async (req, res) => {
     }
 };
 
-exports.searchHotelByLocation = async (req, res) => {
-    const { location } = req.query;
-    try {
-        const hotels = await Hotel.find({ address: { $regex: location, $options: 'i' } });
-        res.status(200).json(hotels);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
+exports.searchHotelsByLocation = async (req, res) => {
+  try {
+    const { city, checkInDate, checkOutDate } = req.query;
+
+    if (!city || !checkInDate || !checkOutDate) {
+      return res.status(400).json({ message: 'City, checkInDate, and checkOutDate are required.' });
     }
+
+    const hotels = await Hotel.find({ city: new RegExp(city, 'i') });
+
+    // For each hotel, you can use your room + reservation logic to count available rooms
+    const results = await Promise.all(hotels.map(async (hotel) => {
+      const availableRooms = await Room.find({
+        hotel: hotel._id,
+        status: 'available'
+      }).countDocuments();
+
+      const minPriceRoom = await Room.findOne({ hotel: hotel._id }).sort({ pricePerNight: 1 });
+      return {
+        hotelId: hotel._id,
+        name: hotel.name,
+        address: hotel.address,
+        city: hotel.city,
+        rating: hotel.rating,
+        totalAvailableRooms: availableRooms,
+        minPricePerNight: minPriceRoom ? minPriceRoom.pricePerNight : hotel.basePrice,
+      };
+    }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 };
 
 // ---- CRUD for Service ----
