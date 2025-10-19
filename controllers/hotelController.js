@@ -28,8 +28,32 @@ exports.createHotel = async (req, res) => {
 
 exports.getAllHotels = async (req, res) => {
     try {
-        const hotels = await Hotel.find();  
-        res.status(200).json(hotels);
+        // support pagination via ?page=1&limit=20 (both optional)
+        const page = Math.max(parseInt(req.query.page) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit) || 20, 1);
+
+        // compute total count
+        const total = await Hotel.countDocuments();
+
+        // fetch paged hotels
+        const hotels = await Hotel.find()
+            .skip((page - 1) * limit)
+            .limit(limit);
+
+        // compute min price per hotel from Room collection (for the hotels on this page)
+        const hotelIds = hotels.map(h => h._id);
+        const mins = await Room.aggregate([
+            { $match: { hotel: { $in: hotelIds } } },
+            { $group: { _id: '$hotel', minPrice: { $min: { $toDouble: '$pricePerNight' } } } }
+        ]);
+        const minMap = mins.reduce((acc, cur) => { acc[cur._id.toString()] = cur.minPrice; return acc; }, {});
+
+        const results = hotels.map(h => ({
+            ...h.toObject(),
+            minPricePerNight: minMap[h._id.toString()] ?? undefined,
+        }));
+
+        res.status(200).json({ results, total, page, limit });
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
@@ -74,34 +98,49 @@ exports.deleteHotel = async (req, res) => {
 
 exports.searchHotelsByLocation = async (req, res) => {
   try {
-    const { city, checkInDate, checkOutDate } = req.query;
+        const { city, checkInDate, checkOutDate } = req.query;
 
-    if (!city || !checkInDate || !checkOutDate) {
-      return res.status(400).json({ message: 'City, checkInDate, and checkOutDate are required.' });
-    }
+        if (!city) {
+            return res.status(400).json({ message: 'City is required.' });
+        }
 
-    const hotels = await Hotel.find({ city: new RegExp(city, 'i') });
+        // pagination for search results
+        const page = Math.max(parseInt(req.query.page) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit) || 20, 1);
 
-    // For each hotel, you can use your room + reservation logic to count available rooms
-    const results = await Promise.all(hotels.map(async (hotel) => {
-      const availableRooms = await Room.find({
-        hotel: hotel._id,
-        status: 'available'
-      }).countDocuments();
+        // find matching hotels
+        const filter = { address: new RegExp(city, 'i') };
+        const total = await Hotel.countDocuments(filter);
 
-      const minPriceRoom = await Room.findOne({ hotel: hotel._id }).sort({ pricePerNight: 1 });
-      return {
-        hotelId: hotel._id,
-        name: hotel.name,
-        address: hotel.address,
-        city: hotel.city,
-        rating: hotel.rating,
-        totalAvailableRooms: availableRooms,
-        minPricePerNight: minPriceRoom ? minPriceRoom.pricePerNight : hotel.basePrice,
-      };
-    }));
+        const hotels = await Hotel.find(filter)
+            .skip((page - 1) * limit)
+            .limit(limit);
 
-    res.status(200).json(results);
+        // get min price for these hotels in one aggregation
+        const hotelIds = hotels.map(h => h._id);
+        const mins = await Room.aggregate([
+            { $match: { hotel: { $in: hotelIds } } },
+            { $group: { _id: '$hotel', minPrice: { $min: { $toDouble: '$pricePerNight' } } } }
+        ]);
+        const minMap = mins.reduce((acc, cur) => { acc[cur._id.toString()] = cur.minPrice; return acc; }, {});
+
+        // For each hotel, count available rooms (status = 'available')
+        const results = await Promise.all(hotels.map(async (hotel) => {
+            const availableRooms = await Room.find({ hotel: hotel._id, status: 'available' }).countDocuments();
+
+            return {
+                hotelId: hotel._id,
+                name: hotel.name,
+                address: hotel.address,
+                city: hotel.city,
+                rating: hotel.rating,
+                totalAvailableRooms: availableRooms,
+                minPricePerNight: minMap[hotel._id.toString()] ?? undefined,
+                images: hotel.images || [],
+            };
+        }));
+
+        res.status(200).json({ results, total, page, limit });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

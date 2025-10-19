@@ -18,7 +18,7 @@ module.exports = async function seedRooms({ hotels, roomTypes }) {
           roomNumber: `${roomNumber}`,
           status: 'available',
           description: `${rt.name} room at ${hotel.name}`,
-          pricePerNight: rt.basePrice + i * 5,
+          pricePerNight: rt.basePrice + i * 5 * 1000,
           images: []
         });
       }

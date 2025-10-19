@@ -1,6 +1,7 @@
 const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const RoomType = require('../models/roomTypeModel');
+const Service = require('../models/serviceModel');
 
 exports.createReservation = async (req, res) => {
   try {
@@ -19,22 +20,53 @@ exports.createReservation = async (req, res) => {
       return res.status(400).json({ message: 'Missing required reservation information.' });
     }
 
-    // Calculate total price
+    // Calculate total price (rooms + services)
     let totalPrice = 0;
+    // We'll prepare details to insert including services and guest counts
+    const detailsToInsert = [];
     for (const item of rooms) {
       const roomType = await RoomType.findById(item.roomTypeId);
       if (!roomType) {
         return res.status(404).json({ message: `Room type ${item.roomTypeId} not found.` });
       }
-      totalPrice += roomType.basePrice * item.quantity;
+
+      const qty = Number(item.quantity || 1);
+      const roomBase = Number(roomType.basePrice || 0);
+      let detailTotal = roomBase * qty;
+
+      // services for this detail: item.services = [{ serviceId, quantity }]
+      const serviceEntries = [];
+      if (Array.isArray(item.services)) {
+        for (const s of item.services) {
+          const serv = await Service.findById(s.serviceId);
+          if (!serv) continue; // skip missing
+          const sqty = Math.max(1, Number(s.quantity || 1));
+          detailTotal += Number(serv.basePrice || 0) * sqty;
+          serviceEntries.push({ service: serv._id, quantity: sqty });
+        }
+      }
+
+      totalPrice += detailTotal;
+
+      detailsToInsert.push({
+        roomType: roomType._id,
+        quantity: qty,
+        adults: Number(item.adults || 1),
+        children: Number(item.children || 0),
+        infants: Number(item.infants || 0),
+        services: serviceEntries
+      });
     }
 
     // (Optional) Apply voucher
-    if (voucherCode) {
-      // Example: assume voucher = { code, discountPercent }
-      const voucher = await Voucher.findOne({ code: voucherCode, isActive: true });
-      if (voucher) {
-        totalPrice = totalPrice * (1 - voucher.discountPercent / 100);
+    if (voucherCode && Voucher) {
+      try {
+        const voucher = await Voucher.findOne({ code: voucherCode, isActive: true });
+        if (voucher) {
+          totalPrice = totalPrice * (1 - voucher.discountPercent / 100);
+        }
+      } catch (e) {
+        // ignore voucher errors
       }
     }
 
@@ -49,13 +81,9 @@ exports.createReservation = async (req, res) => {
       status: 'pending', 
     });
 
-    // ✅ Create reservation details
-    const details = rooms.map((item) => ({
-      reservation: reservation._id,
-      roomType: item.roomTypeId,
-      quantity: item.quantity,
-    }));
-    await ReservationDetail.insertMany(details);
+    // ✅ Create reservation details (attach reservation id)
+    const detailsWithReservation = detailsToInsert.map(d => ({ reservation: reservation._id, ...d }));
+    await ReservationDetail.insertMany(detailsWithReservation);
 
     return res.status(201).json({
       message: 'Reservation created successfully.',
