@@ -4,6 +4,7 @@ const connectDB = require('../config/database');
 const seedHotels = require('./seed-hotels');
 const seedRoomTypes = require('./seed-room-types');
 const seedRooms = require('./seed-rooms');
+const seedServices = require('./seed-services');
 
 (async () => {
   try {
@@ -15,9 +16,11 @@ const seedRooms = require('./seed-rooms');
       console.log('⚠️  Dropped existing database');
     }
 
-    const hotels = await seedHotels();
-    const roomTypes = await seedRoomTypes();
-    await seedRooms({ hotels, roomTypes });
+  const hotels = await seedHotels();
+  // seed services tied to hotels
+  const services = await seedServices(hotels);
+  const roomTypes = await seedRoomTypes();
+  await seedRooms({ hotels, roomTypes });
 
     console.log('✅ Seeding completed');
   } catch (err) {
