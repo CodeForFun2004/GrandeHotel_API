@@ -18,6 +18,7 @@ const passwordRoutes = require('./routes/password.routes');
 const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const hotelRoutes = require('./routes/hotelRoutes');
+const roomTypesRoutes = require('./routes/roomTypesRoutes');
 
 
 const app = express();
@@ -47,6 +48,7 @@ app.use('/api/password', passwordRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
+app.use('/api/room-types', roomTypesRoutes);
 
 
 const PORT = process.env.PORT || 8080;

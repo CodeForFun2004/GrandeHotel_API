@@ -139,6 +139,10 @@ exports.getReservationById = async (req, res) => {
     res.status(500).json({ message: 'Internal server error.', error });
   }
 };
+
+
+
+
 exports.updateReservationStatus = async (req, res) => {
   try {
     const reservationId = req.params.id;
