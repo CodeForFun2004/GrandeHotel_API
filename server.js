@@ -19,7 +19,7 @@ const passwordRoutes = require('./routes/password.routes');
 const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const hotelRoutes = require('./routes/hotelRoutes');
-
+const chatbotRoutes = require('./routes/chatbot.routes');
 
 const app = express();
 // Configure CORS explicitly
@@ -48,7 +48,7 @@ app.use('/api/password', passwordRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
-
+app.use('/api/chatbot', chatbotRoutes);
 
 const PORT = process.env.PORT || 8080;
 
