@@ -689,3 +689,103 @@ exports.searchRooms = async (req, res) => {
     res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };
+
+exports.getAdminRooms = async (req, res) => {
+    try {
+        const rooms = await Room.find().populate('roomType').populate('hotel');
+        res.status(200).json(rooms);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+exports.createAdminRoom = async (req, res) => {
+    const { roomType, hotel, roomNumber, status, description, pricePerNight } = req.body;
+
+    try {
+        // Validate roomType exists
+        const roomTypeDoc = await RoomType.findById(roomType);
+        if (!roomTypeDoc) {
+            return res.status(404).json({ message: 'Room type not found' });
+        }
+
+        // Validate hotel exists
+        const hotelDoc = await Hotel.findById(hotel);
+        if (!hotelDoc) {
+            return res.status(404).json({ message: 'Hotel not found' });
+        }
+
+        const room = new Room({
+            roomType: roomType,
+            hotel: hotel,
+            roomNumber: roomNumber,
+            status: status || 'available',
+            pricePerNight: pricePerNight,
+            description: description
+        });
+
+        await room.save();
+        const populatedRoom = await Room.findById(room._id).populate('roomType').populate('hotel');
+
+        res.status(201).json(populatedRoom);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+exports.updateAdminRoom = async (req, res) => {
+    const roomId = req.params.id;
+    const { roomType, hotel, roomNumber, status, description, pricePerNight } = req.body;
+
+    try {
+        // Validate roomType exists if provided
+        if (roomType) {
+            const roomTypeDoc = await RoomType.findById(roomType);
+            if (!roomTypeDoc) {
+                return res.status(404).json({ message: 'Room type not found' });
+            }
+        }
+
+        // Validate hotel exists if provided
+        if (hotel) {
+            const hotelDoc = await Hotel.findById(hotel);
+            if (!hotelDoc) {
+                return res.status(404).json({ message: 'Hotel not found' });
+            }
+        }
+
+        const room = await Room.findByIdAndUpdate(
+            roomId,
+            {
+                roomType: roomType,
+                hotel: hotel,
+                roomNumber: roomNumber,
+                status: status,
+                description: description,
+                pricePerNight: pricePerNight
+            },
+            { new: true }
+        ).populate('roomType').populate('hotel');
+
+        if (!room) {
+            return res.status(404).json({ message: 'Room not found' });
+        }
+
+        res.status(200).json(room);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+exports.deleteAdminRoom = async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        const room = await Room.findByIdAndDelete(roomId);
+        if (!room) {
+            return res.status(404).json({ message: 'Room not found' });
+        }
+        res.status(200).json({ message: 'Room deleted successfully' });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};

@@ -18,7 +18,11 @@ const userRoutes = require('./routes/user.routes')
 const passwordRoutes = require('./routes/password.routes');
 const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
+
 const roomTypeRoutes = require('./routes/roomTypeRoutes');
+
+const roomController = require('./controllers/roomController');
+
 const hotelRoutes = require('./routes/hotelRoutes');
 const managerUserRoutes = require('./routes/managerUserRoutes');
 
@@ -52,11 +56,10 @@ app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/room-types', roomTypeRoutes);
 app.use('/api/admin/managers', managerUserRoutes);
-
+app.use('/api/chatbot', chatbotRoutes);
 
 const PORT = process.env.PORT || 1000;
 
 app.listen(PORT, '0.0.0.0', () =>{
    console.log(`🚀 HHHHHHH Server running on http://localhost:${PORT}`)
 });
-
