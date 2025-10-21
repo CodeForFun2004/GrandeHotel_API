@@ -18,7 +18,8 @@ const passwordRoutes = require('./routes/password.routes');
 const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const hotelRoutes = require('./routes/hotelRoutes');
-const contactRoutes = require('./routes/contact.routes')
+const contactRoutes = require('./routes/contact.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
 
 
 const app = express();
@@ -48,11 +49,11 @@ app.use('/api/password', passwordRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
-app.use('/api/contacts', contactRoutes)
+app.use('/api/contacts', contactRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, '0.0.0.0', () =>{
    console.log(`🚀 HHHHHHH Server running on http://localhost:${PORT}`)
 });
-
