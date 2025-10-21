@@ -10,41 +10,31 @@ const mongoose = require('mongoose');
 exports.createRoomType = async (req, res) => {
     try {
         const { name, capacity, basePrice, numberOfBeds, description, amenities, isActive } = req.body;
-        
-        // Get manager's hotel ID
-        const hotelId = req.user?.hotelId || req.user?.storeId;
-        if (!hotelId) {
-            return res.status(403).json({ 
-                success: false, 
-                message: 'Manager hotel ID not found' 
-            });
-        }
 
         // Validation
         if (!name || !basePrice || !capacity) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Name, basePrice, and capacity are required' 
+            return res.status(400).json({
+                success: false,
+                message: 'Name, basePrice, and capacity are required'
             });
         }
 
         if (basePrice <= 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Base price must be greater than 0' 
+            return res.status(400).json({
+                success: false,
+                message: 'Base price must be greater than 0'
             });
         }
 
-        // Check if name already exists in this hotel
-        const existingRoomType = await RoomType.findOne({ 
-            name: { $regex: new RegExp(`^${name}$`, 'i') }, 
-            hotel: hotelId 
+        // Check if name already exists globally (now unique across all hotels)
+        const existingRoomType = await RoomType.findOne({
+            name: { $regex: new RegExp(`^${name}$`, 'i') }
         });
 
         if (existingRoomType) {
-            return res.status(409).json({ 
-                success: false, 
-                message: 'Room type name already exists in this hotel' 
+            return res.status(409).json({
+                success: false,
+                message: 'Room type name already exists globally'
             });
         }
 
@@ -56,13 +46,11 @@ exports.createRoomType = async (req, res) => {
             description,
             amenities: amenities || [],
             isActive: isActive !== undefined ? isActive : true,
-            hotel: hotelId,
             maxCapacity: capacity
         });
-        
+
         await roomType.save();
-        await roomType.populate('hotel', 'name address');
-        
+
         res.status(201).json({
             success: true,
             data: roomType,
@@ -70,25 +58,16 @@ exports.createRoomType = async (req, res) => {
         });
     } catch (error) {
         console.error('Error creating room type:', error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: 'Internal server error',
-            error: error.message 
+            error: error.message
         });
-    }   
+    }
 };
 
 exports.getAllRoomTypes = async (req, res) => {
     try {
-        // Get manager's hotel ID
-        const hotelId = req.user?.hotelId || req.user?.storeId;
-        if (!hotelId) {
-            return res.status(403).json({ 
-                success: false, 
-                message: 'Manager hotel ID not found' 
-            });
-        }
-
         // Pagination
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
@@ -97,27 +76,26 @@ exports.getAllRoomTypes = async (req, res) => {
         // Search and filter
         const search = req.query.search || '';
         const isActive = req.query.isActive;
-        
-        // Build query
-        let query = { hotel: hotelId };
-        
+
+        // Build query - no hotel scoping, room types are global
+        let query = {};
+
         if (search) {
             query.$or = [
                 { name: { $regex: search, $options: 'i' } },
                 { description: { $regex: search, $options: 'i' } }
             ];
         }
-        
+
         if (isActive !== undefined) {
             query.isActive = isActive === 'true';
         }
 
         // Get total count
         const total = await RoomType.countDocuments(query);
-        
+
         // Get room types with pagination
         const roomTypes = await RoomType.find(query)
-            .populate('hotel', 'name address')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
@@ -128,10 +106,10 @@ exports.getAllRoomTypes = async (req, res) => {
             name: rt.name,
             description: rt.description,
             basePrice: rt.basePrice,
-            maxCapacity: rt.maxCapacity,
+            capacity: rt.capacity, // Use capacity field consistently
+            numberOfBeds: rt.numberOfBeds || Math.ceil(rt.capacity / 2),
             amenities: rt.amenities || [],
-            isActive: rt.isActive,
-            hotel: rt.hotel
+            isActive: rt.isActive
         }));
 
         res.status(200).json({
@@ -147,28 +125,24 @@ exports.getAllRoomTypes = async (req, res) => {
         });
     } catch (error) {
         console.error('Error getting room types:', error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: 'Internal server error',
-            error: error.message 
+            error: error.message
         });
-    }   
+    }
 };
 
 exports.getRoomTypeById = async (req, res) => {
     try {
         const roomTypeId = req.params.id;
-        const hotelId = req.user?.hotelId || req.user?.storeId;
 
-        const roomType = await RoomType.findOne({ 
-            _id: roomTypeId, 
-            hotel: hotelId 
-        }).populate('hotel', 'name address');
+        const roomType = await RoomType.findById(roomTypeId);
 
         if (!roomType) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Room type not found' 
+            return res.status(404).json({
+                success: false,
+                message: 'Room type not found'
             });
         }
 
@@ -178,10 +152,10 @@ exports.getRoomTypeById = async (req, res) => {
             name: roomType.name,
             description: roomType.description,
             basePrice: roomType.basePrice,
-            maxCapacity: roomType.maxCapacity,
+            capacity: roomType.capacity, // Use consistent field name
+            numberOfBeds: roomType.numberOfBeds || Math.ceil(roomType.capacity / 2),
             amenities: roomType.amenities || [],
-            isActive: roomType.isActive,
-            hotel: roomType.hotel
+            isActive: roomType.isActive
         };
 
         res.status(200).json({
@@ -191,10 +165,10 @@ exports.getRoomTypeById = async (req, res) => {
         });
     } catch (error) {
         console.error('Error getting room type:', error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: 'Internal server error',
-            error: error.message 
+            error: error.message
         });
     }
 };
@@ -202,50 +176,45 @@ exports.getRoomTypeById = async (req, res) => {
 exports.updateRoomType = async (req, res) => {
     try {
         const roomTypeId = req.params.id;
-        const hotelId = req.user?.hotelId || req.user?.storeId;
         const { name, description, basePrice, maxCapacity, amenities, isActive } = req.body;
 
         // Find existing room type
-        const existingRoomType = await RoomType.findOne({ 
-            _id: roomTypeId, 
-            hotel: hotelId 
-        });
+        const existingRoomType = await RoomType.findById(roomTypeId);
 
         if (!existingRoomType) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Room type not found' 
+            return res.status(404).json({
+                success: false,
+                message: 'Room type not found'
             });
         }
 
-        // Check if new name conflicts with existing room types
+        // Check if new name conflicts with existing room types globally
         if (name && name !== existingRoomType.name) {
-            const nameConflict = await RoomType.findOne({ 
-                name: { $regex: new RegExp(`^${name}$`, 'i') }, 
-                hotel: hotelId,
+            const nameConflict = await RoomType.findOne({
+                name: { $regex: new RegExp(`^${name}$`, 'i') },
                 _id: { $ne: roomTypeId }
             });
 
             if (nameConflict) {
-                return res.status(409).json({ 
-                    success: false, 
-                    message: 'Room type name already exists in this hotel' 
+                return res.status(409).json({
+                    success: false,
+                    message: 'Room type name already exists globally'
                 });
             }
         }
 
         // Validation
         if (basePrice !== undefined && basePrice <= 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Base price must be greater than 0' 
+            return res.status(400).json({
+                success: false,
+                message: 'Base price must be greater than 0'
             });
         }
 
         if (maxCapacity !== undefined && maxCapacity <= 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Max capacity must be greater than 0' 
+            return res.status(400).json({
+                success: false,
+                message: 'Max capacity must be greater than 0'
             });
         }
 
@@ -261,7 +230,7 @@ exports.updateRoomType = async (req, res) => {
                 ...(isActive !== undefined && { isActive })
             },
             { new: true, runValidators: true }
-        ).populate('hotel', 'name address');
+        );
 
         res.status(200).json({
             success: true,
@@ -270,10 +239,10 @@ exports.updateRoomType = async (req, res) => {
         });
     } catch (error) {
         console.error('Error updating room type:', error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: 'Internal server error',
-            error: error.message 
+            error: error.message
         });
     }
 };
@@ -281,31 +250,26 @@ exports.updateRoomType = async (req, res) => {
 exports.deleteRoomType = async (req, res) => {
     try {
         const roomTypeId = req.params.id;
-        const hotelId = req.user?.hotelId || req.user?.storeId;
 
-        // Check if room type exists and belongs to manager's hotel
-        const roomType = await RoomType.findOne({ 
-            _id: roomTypeId, 
-            hotel: hotelId 
-        });
+        // Check if room type exists
+        const roomType = await RoomType.findById(roomTypeId);
 
         if (!roomType) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Room type not found' 
+            return res.status(404).json({
+                success: false,
+                message: 'Room type not found'
             });
         }
 
-        // Check if room type is being used by any rooms
-        const roomsUsingType = await Room.countDocuments({ 
-            roomType: roomTypeId, 
-            hotel: hotelId 
+        // Check if room type is being used by any rooms globally
+        const roomsUsingType = await Room.countDocuments({
+            roomType: roomTypeId
         });
 
         if (roomsUsingType > 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Cannot delete room type. It is being used by ${roomsUsingType} room(s). Please delete or reassign those rooms first.` 
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete room type. It is being used by ${roomsUsingType} room(s) across all hotels. Please delete or reassign those rooms first.`
             });
         }
 
@@ -317,10 +281,10 @@ exports.deleteRoomType = async (req, res) => {
         });
     } catch (error) {
         console.error('Error deleting room type:', error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: 'Internal server error',
-            error: error.message 
+            error: error.message
         });
     }
 };
@@ -371,16 +335,13 @@ exports.createRoom = async (req, res) => {
             });
         }
 
-        // Check if room type exists and belongs to manager's hotel
-        const roomTypeExists = await RoomType.findOne({ 
-            _id: roomType, 
-            hotel: hotelId 
-        });
+        // Check if room type exists globally (room types are now shared)
+        const roomTypeExists = await RoomType.findById(roomType);
 
         if (!roomTypeExists) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Room type not found or does not belong to your hotel' 
+            return res.status(400).json({
+                success: false,
+                message: 'Room type not found'
             });
         }
 

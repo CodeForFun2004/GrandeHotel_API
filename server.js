@@ -19,7 +19,7 @@ const passwordRoutes = require('./routes/password.routes');
 const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 
-const roomTypeRoutes = require('./routes/roomTypeRoutes');
+
 
 const roomController = require('./controllers/roomController');
 
@@ -54,9 +54,8 @@ app.use('/api/password', passwordRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
-app.use('/api/room-types', roomTypeRoutes);
 app.use('/api/admin/managers', managerUserRoutes);
-app.use('/api/chatbot', chatbotRoutes);
+// app.use('/api/chatbot', chatbotRoutes);
 
 const PORT = process.env.PORT || 1000;
 
