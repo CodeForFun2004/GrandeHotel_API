@@ -2,7 +2,7 @@ const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const RoomType = require('../models/roomTypeModel');
 const Service = require('../models/serviceModel');
-
+//reservation voucher model (optional)
 exports.createReservation = async (req, res) => {
   try {
     const {
