@@ -17,12 +17,12 @@ const { protect, isAdmin } = require('../middlewares/auth.middleware');
 router.post('/', createContact);
 
 // Protected routes (Admin only)
-router.get('/', protect, getContacts);
-router.get('/stats', protect, getContactsStats);
+router.get('/', protect, isAdmin, getContacts);
+router.get('/stats', protect, isAdmin, getContactsStats);
 
 router.route('/:id')
-  .get(isAdmin, getContactById)
-  .put(isAdmin, updateContact)
-  .delete(isAdmin, deleteContact);
+  .get(protect, isAdmin, getContactById)
+  .put(protect, isAdmin, updateContact)
+  .delete(protect, isAdmin, deleteContact);
 
 module.exports = router;
