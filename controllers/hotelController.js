@@ -58,6 +58,7 @@ exports.getAllHotels = async (req, res) => {
         res.status(400).json({ message: error.message });
     }
 };
+//git
 
 exports.getHotelById = async (req, res) => {
     try {

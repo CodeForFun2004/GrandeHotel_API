@@ -4,7 +4,7 @@ const Room = require('../models/roomModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const Reservation = require('../models/reservationModel');
 const mongoose = require('mongoose');
-
+//git
 //This includes CRUD operations for RoomType and Room
 // ---- CRUD for RoomType ----
 exports.createRoomType = async (req, res) => {
