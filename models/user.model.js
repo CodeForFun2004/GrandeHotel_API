@@ -55,6 +55,12 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Store',
     default: null
+  },
+
+  hotelId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Hotel',
+    default: null
   }
 
 }, { timestamps: true });
