@@ -1,0 +1,312 @@
+{
+	"info": {
+		"_postman_id": "favorite-api-collection",
+		"name": "Grand Hotel API - Favorites",
+		"description": "Collection để test API Favorites của Grand Hotel",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Favorites",
+			"item": [
+				{
+					"name": "Add Hotel to Favorites",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"userId\": \"68e5d4dc5330fe88ef797299\",\n    \"hotelId\": \"68f6fb33d5d4ba93788cab3e\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/favorites",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"favorites"
+							]
+						},
+						"description": "Thêm hotel vào danh sách yêu thích của user"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Favorites",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/favorites?userId=68e5d4dc5330fe88ef797299",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"favorites"
+							],
+							"query": [
+								{
+									"key": "userId",
+									"value": "68e5d4dc5330fe88ef797299"
+								}
+							]
+						},
+						"description": "Lấy danh sách hotel yêu thích của user"
+					},
+					"response": []
+				},
+				{
+					"name": "Check Hotel Favorite Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/favorites/check/68f6fb33d5d4ba93788cab3e?userId=68e5d4dc5330fe88ef797299",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"favorites",
+								"check",
+								"68f6fb33d5d4ba93788cab3e"
+							],
+							"query": [
+								{
+									"key": "userId",
+									"value": "68e5d4dc5330fe88ef797299"
+								}
+							]
+						},
+						"description": "Kiểm tra xem hotel có trong danh sách yêu thích không"
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Hotel from Favorites",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/favorites/68f6fb33d5d4ba93788cab3e?userId=68e5d4dc5330fe88ef797299",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"favorites",
+								"68f6fb33d5d4ba93788cab3e"
+							],
+							"query": [
+								{
+									"key": "userId",
+									"value": "68e5d4dc5330fe88ef797299"
+								}
+							]
+						},
+						"description": "Xóa hotel khỏi danh sách yêu thích"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Reservations",
+			"item": [
+				{
+					"name": "Get All Reservations",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/reservations",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reservations"
+							]
+						},
+						"description": "Lấy tất cả reservations"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Reservation by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/reservations/68f845d030e051f9d4af2e3a",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reservations",
+								"68f845d030e051f9d4af2e3a"
+							]
+						},
+						"description": "Lấy thông tin chi tiết reservation"
+					},
+					"response": []
+				},
+				{
+					"name": "Approve Reservation",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"action\": \"approve\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reservations/68f845d030e051f9d4af2e3a/approve",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reservations",
+								"68f845d030e051f9d4af2e3a",
+								"approve"
+							]
+						},
+						"description": "Approve reservation"
+					},
+					"response": []
+				},
+				{
+					"name": "Cancel Reservation",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"action\": \"cancel\",\n    \"reason\": \"Khách hàng không đủ điều kiện thanh toán\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reservations/68f845d030e051f9d4af2e3a/approve",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reservations",
+								"68f845d030e051f9d4af2e3a",
+								"approve"
+							]
+						},
+						"description": "Cancel reservation với lý do"
+					},
+					"response": []
+				},
+				{
+					"name": "Select Payment Option - Deposit",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"paymentType\": \"deposit\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reservations/68f845d030e051f9d4af2e3a/payment-options",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reservations",
+								"68f845d030e051f9d4af2e3a",
+								"payment-options"
+							]
+						},
+						"description": "Chọn thanh toán cọc và generate QR code"
+					},
+					"response": []
+				},
+				{
+					"name": "Select Payment Option - Full",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"paymentType\": \"full\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reservations/68f845d030e051f9d4af2e3a/payment-options",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reservations",
+								"68f845d030e051f9d4af2e3a",
+								"payment-options"
+							]
+						},
+						"description": "Chọn thanh toán toàn bộ và generate QR code"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:1000",
+			"type": "string"
+		}
+	]
+}

@@ -20,7 +20,7 @@ const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const hotelRoutes = require('./routes/hotelRoutes');
 const roomTypesRoutes = require('./routes/roomTypesRoutes');
-
+const favoriteRoutes = require('./routes/favoriteRoutes');
 
 const chatbotRoutes = require('./routes/chatbot.routes');
 
@@ -53,6 +53,7 @@ app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/room-types', roomTypesRoutes);
+app.use('/api/favorites', favoriteRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 
 
