@@ -12,5 +12,6 @@ router.get('/:id', hotelController.getHotelById);
 router.post('/', hotelController.createHotel);
 router.put('/:id', hotelController.updateHotel);
 router.delete('/:id', hotelController.deleteHotel);
+//git
 
 module.exports = router;

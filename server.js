@@ -5,6 +5,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const { Server } = require('socket.io');
 const passport = require('passport');
+//git
 
 const connectDB = require('./config/database');  // 🔧 Đường dẫn DB
 
@@ -20,6 +21,11 @@ const roomRoutes = require('./routes/roomRoutes');
 const hotelRoutes = require('./routes/hotelRoutes');
 const contactRoutes = require('./routes/contact.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
+
+const roomTypesRoutes = require('./routes/roomTypesRoutes');
+const favoriteRoutes = require('./routes/favoriteRoutes');
+
+const chatbotRoutes = require('./routes/chatbot.routes');
 
 
 const app = express();
@@ -51,6 +57,10 @@ app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/room-types', roomTypesRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/chatbot', chatbotRoutes);
+
 
 const PORT = process.env.PORT || 8080;
 
