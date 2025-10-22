@@ -103,11 +103,18 @@ exports.createReservation = async (req, res) => {
         await ReservationDetail.insertMany(detailsWithReservation);
         
         // --- BƯỚC 5: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
+        // Lấy thông tin hotel để tạo nội dung chuyển khoản
+        const Hotel = require('../models/hotelModel');
+        const hotel = await Hotel.findById(hotelId);
+        const hotelName = hotel ? hotel.name.replace(/\s+/g, '').toUpperCase() : 'HOTEL';
+        
+        // Tạo nội dung chuyển khoản có ý nghĩa
+        const transferContent = `THANH TOAN PHONG ${reservation._id.toString().slice(-6)} ${hotelName} ${isFullPayment ? 'FULL' : 'COC'}`;
         const vietQRLink = await generateVietQR(
             process.env.MY_BANK_CODE, 
             process.env.MY_ACCOUNT_NUMBER, 
             amountToPay, 
-            reservation._id.toString() 
+            transferContent 
         );
 
         return res.status(201).json({
@@ -287,30 +294,31 @@ exports.getReservationById = async (req, res) => {
             return res.status(404).json({ message: 'Reservation not found.' });
         }
 
-        // Tạo lại paymentInfo dựa trên trạng thái reservation
-        let paymentInfo = null;
+        // Hiển thị payment options thay vì tự động generate QR
+        let paymentOptions = null;
         if (reservation.status === 'approved') {
-            // Chỉ khi được approve thì mới được phép thanh toán
-            // Tính toán số tiền cần thanh toán
+            // Chỉ khi được approve thì mới hiển thị payment options
             const DEPOSIT_PERCENTAGE = 0.5;
             const requiredDeposit = Math.ceil(reservation.totalPrice * DEPOSIT_PERCENTAGE);
-            const amountToPay = reservation.paymentStatus === 'unpaid' ? requiredDeposit : 
-                               (reservation.paymentStatus === 'deposit_paid' ? reservation.totalPrice - requiredDeposit : 0);
             
-            if (amountToPay > 0) {
-                // Tạo VietQR link cho thanh toán
-                const vietQRLink = await generateVietQR(
-                    process.env.MY_BANK_CODE, 
-                    process.env.MY_ACCOUNT_NUMBER, 
-                    amountToPay, 
-                    reservation._id.toString() 
-                );
+            paymentOptions = {
+                reservationTotal: reservation.totalPrice,
+                depositAmount: requiredDeposit,
+                currentPaymentStatus: reservation.paymentStatus,
+                availableOptions: []
+            };
 
-                paymentInfo = {
-                    requiredAmount: amountToPay,
-                    vietQRLink: vietQRLink,
-                    isFullPaymentRequested: reservation.paymentStatus === 'deposit_paid'
-                };
+            // Xác định các payment options có sẵn
+            if (reservation.paymentStatus === 'unpaid') {
+                paymentOptions.availableOptions = [
+                    { type: 'deposit', amount: requiredDeposit, description: 'Thanh toán cọc 50%' },
+                    { type: 'full', amount: reservation.totalPrice, description: 'Thanh toán toàn bộ 100%' }
+                ];
+            } else if (reservation.paymentStatus === 'deposit_paid') {
+                const remainingAmount = reservation.totalPrice - requiredDeposit;
+                paymentOptions.availableOptions = [
+                    { type: 'full', amount: remainingAmount, description: `Thanh toán phần còn lại (${remainingAmount.toLocaleString()} VND)` }
+                ];
             }
         }
 
@@ -319,9 +327,9 @@ exports.getReservationById = async (req, res) => {
             reservation,
         };
 
-        // Chỉ thêm paymentInfo nếu có
-        if (paymentInfo) {
-            responseData.paymentInfo = paymentInfo;
+        // Chỉ thêm paymentOptions nếu có
+        if (paymentOptions) {
+            responseData.paymentOptions = paymentOptions;
         }
 
         return res.status(200).json(responseData);
@@ -333,7 +341,86 @@ exports.getReservationById = async (req, res) => {
 };
 
 
-// [6] CẬP NHẬT TRẠNG THÁI CUỐI CÙNG (rejected, completed, canceled)
+// [6] CHỌN PHƯƠNG THỨC THANH TOÁN VÀ TẠO QR CODE
+exports.selectPaymentOption = async (req, res) => {
+    try {
+        const reservationId = req.params.id;
+        const { paymentType } = req.body; // 'full' hoặc 'deposit'
+
+        // Validate paymentType
+        if (!paymentType || !['full', 'deposit'].includes(paymentType)) {
+            return res.status(400).json({ message: 'Payment type must be either "full" or "deposit".' });
+        }
+
+        const reservation = await Reservation.findById(reservationId);
+        if (!reservation) {
+            return res.status(404).json({ message: 'Reservation not found.' });
+        }
+
+        // Chỉ cho phép thanh toán khi reservation đã được approve
+        if (reservation.status !== 'approved') {
+            return res.status(400).json({ 
+                message: `Reservation is ${reservation.status}. Payment is only allowed for approved reservations.` 
+            });
+        }
+
+        // Tính toán số tiền cần thanh toán
+        const DEPOSIT_PERCENTAGE = 0.5;
+        const requiredDeposit = Math.ceil(reservation.totalPrice * DEPOSIT_PERCENTAGE);
+        let amountToPay = 0;
+
+        if (paymentType === 'full') {
+            amountToPay = reservation.totalPrice;
+        } else if (paymentType === 'deposit') {
+            amountToPay = requiredDeposit;
+        }
+
+        // Kiểm tra xem đã thanh toán chưa
+        if (reservation.paymentStatus === 'fully_paid') {
+            return res.status(400).json({ message: 'Reservation is already fully paid.' });
+        }
+
+        if (paymentType === 'full' && reservation.paymentStatus === 'deposit_paid') {
+            // Thanh toán phần còn lại
+            amountToPay = reservation.totalPrice - requiredDeposit;
+        }
+
+        if (amountToPay <= 0) {
+            return res.status(400).json({ message: 'No payment required.' });
+        }
+
+        // Lấy thông tin hotel để tạo nội dung chuyển khoản
+        const Hotel = require('../models/hotelModel');
+        const hotel = await Hotel.findById(reservation.hotel);
+        const hotelName = hotel ? hotel.name.replace(/\s+/g, '').toUpperCase() : 'HOTEL';
+        
+        // Tạo nội dung chuyển khoản có ý nghĩa
+        const transferContent = `THANH TOAN PHONG ${reservation._id.toString().slice(-6)} ${hotelName} ${paymentType.toUpperCase()}`;
+        const vietQRLink = await generateVietQR(
+            process.env.MY_BANK_CODE, 
+            process.env.MY_ACCOUNT_NUMBER, 
+            amountToPay, 
+            transferContent 
+        );
+
+        return res.status(200).json({
+            message: 'Payment QR code generated successfully.',
+            paymentInfo: {
+                paymentType: paymentType,
+                requiredAmount: amountToPay,
+                vietQRLink: vietQRLink,
+                reservationTotal: reservation.totalPrice,
+                depositAmount: requiredDeposit
+            }
+        });
+
+    } catch (error) {
+        console.error('Error generating payment QR:', error);
+        res.status(500).json({ message: 'Internal server error.', error: error.message });
+    }
+};
+
+// [7] CẬP NHẬT TRẠNG THÁI CUỐI CÙNG (rejected, completed, canceled)
 
 exports.updateReservationStatus = async (req, res) => {
     try {
