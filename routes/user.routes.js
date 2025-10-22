@@ -31,14 +31,12 @@ const uploadUserAvatar = upload({
 // @route   GET /api/users
 // @desc    Lấy danh sách tất cả người dùng (admin)
 // @access  Private/Admin
-// router.get('/', protect, isAdmin, getAllUsers);
-router.get('/', getAllUsers);
+router.get('/', protect, isAdmin, getAllUsers);
 
 // @route   POST /api/users
 // @desc    Tạo người dùng mới (admin sử dụng)
 // @access  Private/Admin
-// router.post('/', protect, isAdmin, createUser);
-router.post('/', createUser);
+router.post('/', protect, isAdmin, createUser);
 
 // @route   GET /api/users/me
 // @desc    Lấy thông tin cá nhân đã đăng nhập
@@ -64,64 +62,55 @@ router.get('/:id', protect, getUserById);
 // router.put('/:id', upload.single('avatar'), updateUser);
 
 // update user avatar only
-router.put('/:id/avatar', uploadUserAvatar.single('avatar'), updateUserAvatar);
+router.put('/:id/avatar', protect, uploadUserAvatar.single('avatar'), updateUserAvatar);
 
-router.put('/:id', uploadUserAvatar.single('avatar'), updateUser);
+router.put('/:id', protect, uploadUserAvatar.single('avatar'), updateUser);
 
 
 
 // @route   DELETE /api/users/:id
 // @desc    Xóa người dùng
 // @access  Private/Admin
-// router.delete('/:id', protect, isAdmin, deleteUser);
-router.delete('/:id', deleteUser);
+router.delete('/:id', protect, isAdmin, deleteUser);
 
 // @route   PUT /api/users/:id/suspend
 // @desc    Khóa hoặc tạm ngưng người dùng
 // @access  Private/Admin
-// router.put('/suspend/:id', protect, isAdmin, suspendUser)
-router.put('/suspend/:id', suspendUser)
+router.put('/suspend/:id', protect, isAdmin, suspendUser)
 
 // @route   PUT /api/users/unsuspend/:id
 // @desc    Mở khóa người dùng
 // @access  Private/Admin
-// router.put('/unsuspend/:id', protect, isAdmin, unsuspendUser);
-router.put('/unsuspend/:id', unsuspendUser);
+router.put('/unsuspend/:id', protect, isAdmin, unsuspendUser);
 
 // @route   GET /api/staff
 // @desc    Lấy danh sách tất cả staff/shipper
 // @access  Private/Admin
-// router.get('/admin/staff', protect, isAdmin, getAllStaff);
-router.get('/admin/staff', getAllStaff);
+router.get('/admin/staff', protect, isAdmin, getAllStaff);
 
 // @route   POST /api/staff
 // @desc    Tạo tài khoản staff/shipper mới
 // @access  Private/Admin
-// router.post('/admin/staff', protect, isAdmin, createStaff);
-router.post('/admin/staff', createStaff);
+router.post('/admin/staff', protect, isAdmin, createStaff);
 
 // @route   GET /api/staff/:id
 // @desc    Lấy thông tin chi tiết của staff/shipper
 // @access  Private/Admin
-// router.get('/admin/staff/:id', protect, isAdmin, getStaffById);
-router.get('/admin/staff/:id', getStaffById);
+router.get('/admin/staff/:id', protect, isAdmin, getStaffById);
 
 // @route   PUT /api/staff/:id
 // @desc    Cập nhật thông tin staff/shipper
 // @access  Private/Admin
-// router.put('/admin/staff/:id', uploadUserAvatar.single('avatar'), protect, isAdmin, updateStaff);
-router.put('/admin/staff/:id', uploadUserAvatar.single('avatar'), updateStaff);
+router.put('/admin/staff/:id', uploadUserAvatar.single('avatar'), protect, isAdmin, updateStaff);
 
 // @route   DELETE /api/staff/:id
 // @desc    Xóa tài khoản staff/shipper
 // @access  Private/Admin
-// router.delete('/admin/staff/:id', protect, isAdmin, deleteStaff);
-router.delete('/admin/staff/:id', deleteStaff);
+router.delete('/admin/staff/:id', protect, isAdmin, deleteStaff);
 
 // @route   DELETE /api/users/:id
 // @desc    Xóa người dùng
 // @access  Private/Admin
-// router.delete('/admin/:id', protect, isAdmin, deleteUser);
-router.delete('/admin/:id', deleteUser);
+router.delete('/admin/:id', protect, isAdmin, deleteUser);
 
 module.exports = router;
