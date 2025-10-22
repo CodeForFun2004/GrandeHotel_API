@@ -45,6 +45,10 @@ const isStaff = (req, res, next) => {
 
 const isHotelManager = (req, res, next) => {
   if (req.user && req.user.role === 'hotel-manager') {
+    // Ensure manager has hotelId
+    if (!req.user.hotelId && !req.user.storeId) {
+      return res.status(403).json({ message: 'Manager không có hotel ID được gán' });
+    }
     return next();
   } else {
     return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho hotel-manager' });
