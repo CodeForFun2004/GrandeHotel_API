@@ -48,7 +48,7 @@ const reservationSchema = new mongoose.Schema({
     },
     paymentStatus: { // Trạng thái Thanh toán (Xử lý 50% hoặc 100%)
         type: String, 
-        enum: ['unpaid', 'deposit_paid', 'fully_paid', 'refunded'], 
+        enum: ['unpaid', 'deposit_paid', 'fully_paid', 'partially_paid', 'refunded'], 
         default: 'unpaid',
         index: true
     },
