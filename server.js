@@ -22,9 +22,14 @@ const roomRoutes = require('./routes/roomRoutes');
 
 
 const roomController = require('./controllers/roomController');
-
 const hotelRoutes = require('./routes/hotelRoutes');
 const managerUserRoutes = require('./routes/managerUserRoutes');
+const contactRoutes = require('./routes/contact.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
+const roomTypesRoutes = require('./routes/roomTypesRoutes');
+const favoriteRoutes = require('./routes/favoriteRoutes');
+const chatbotRoutes = require('./routes/chatbot.routes');
+
 
 
 const app = express();
@@ -54,8 +59,16 @@ app.use('/api/password', passwordRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
+
 app.use('/api/admin/managers', managerUserRoutes);
-// app.use('/api/chatbot', chatbotRoutes);
+
+
+app.use('/api/contacts', contactRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/room-types', roomTypesRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/chatbot', chatbotRoutes);
+
 
 const PORT = process.env.PORT || 1000;
 
