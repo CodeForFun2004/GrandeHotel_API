@@ -22,6 +22,9 @@ const hotelRoutes = require('./routes/hotelRoutes');
 const roomTypesRoutes = require('./routes/roomTypesRoutes');
 
 
+const chatbotRoutes = require('./routes/chatbot.routes');
+
+
 const app = express();
 // Configure CORS explicitly
 app.use(cors({
@@ -50,6 +53,7 @@ app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/room-types', roomTypesRoutes);
+app.use('/api/chatbot', chatbotRoutes);
 
 
 const PORT = process.env.PORT || 8080;
