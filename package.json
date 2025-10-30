@@ -33,14 +33,14 @@
     "mongoose": "^8.18.1",
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
-    "node-fetch": "^3.3.2",
+    "node-fetch": "^2.7.0",
     "nodemailer": "^7.0.6",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "uuid": "^13.0.0"
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
