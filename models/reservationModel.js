@@ -11,7 +11,7 @@ const reservationSchema = new mongoose.Schema({
     customer: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'User', 
-        required: true, 
+        required: false, // Cho phép null cho guest
         index: true 
     },
     
@@ -29,28 +29,12 @@ const reservationSchema = new mongoose.Schema({
         required: true 
     },
     
-    // --- THANH TOÁN & GIÁ CẢ ---
-    totalPrice: { 
-        type: Number, 
-        required: true 
-    },
-    depositAmount: { // Số tiền cọc cần thanh toán
-        type: Number, 
-        default: 0 
-    },
-    
     // --- TRẠNG THÁI QUẢN LÝ LUỒNG NGHỆP VỤ ---
     status: { // Trạng thái của Đơn đặt phòng (Duyệt & Hủy)
         type: String, 
         enum: ['pending', 'approved', 'rejected', 'canceled', 'completed'], 
         default: 'pending',
         index: true 
-    },
-    paymentStatus: { // Trạng thái Thanh toán (Xử lý 50% hoặc 100%)
-        type: String, 
-        enum: ['unpaid', 'deposit_paid', 'fully_paid', 'partially_paid', 'refunded'], 
-        default: 'unpaid',
-        index: true
     },
 
     // --- XÁC THỰC CHECK-IN BẰNG QR CODE ---
@@ -81,6 +65,14 @@ reservationSchema.virtual('details', {
     ref: 'ReservationDetail',
     localField: '_id',
     foreignField: 'reservation'
+});
+
+// Virtual field để populate payment từ Payment
+reservationSchema.virtual('payment', {
+    ref: 'Payment',
+    localField: '_id',
+    foreignField: 'reservation',
+    justOne: true // Một reservation chỉ có một payment
 });
 
 // Đảm bảo virtual fields được include khi convert sang JSON
