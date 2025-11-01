@@ -1,11 +1,20 @@
 // Giả định thư viện Mongoose Models đã được import
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-const fetch = require("node-fetch");
+// `node-fetch` v3 is ESM and exposes the fetch function as the default export when required.
+// Use a resilient import: prefer global fetch (Node18+), otherwise use node-fetch default.
+let fetch;
+try {
+    fetch = global.fetch || (require('node-fetch').default ? require('node-fetch').default : require('node-fetch'));
+} catch (e) {
+    // Fallback: try require('node-fetch') directly
+    try { fetch = require('node-fetch'); } catch (err) { fetch = null; }
+}
 const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const RoomType = require('../models/roomTypeModel');
 const Service = require('../models/serviceModel');
+const Room = require('../models/roomModel');
 // const Voucher = require('../models/voucherModel'); // Nếu có
 // const Payment = require('../models/paymentModel'); // Nếu có
 
@@ -63,7 +72,8 @@ exports.createReservation = async (req, res) => {
                     const serv = await Service.findById(s.serviceId);
                     if (!serv) continue;
                     const sqty = Math.max(1, Number(s.quantity || 1));
-                    detailTotal += Number(serv.price || 0) * sqty; 
+                    // Use Service.basePrice defined in serviceModel
+                    detailTotal += Number(serv.basePrice || 0) * sqty; 
                     serviceEntries.push({ service: serv._id, quantity: sqty });
                 }
             }
@@ -377,7 +387,18 @@ exports.handlePayment = async (req, res) => {
       { new: true }
     );
 
-    // === [5] LOG THÀNH CÔNG ===
+        // === [5] ALLOCATE ROOMS WHEN DEPOSIT OR FULLY PAID ===
+        let allocation = { performed: false };
+        if (['deposit_paid', 'fully_paid'].includes(newPaymentStatus)) {
+            try {
+                allocation = await allocateRoomsForReservation(updatedReservation);
+            } catch (e) {
+                console.error('[ALLOCATE] Failed to allocate rooms:', e.message);
+                allocation = { performed: true, success: false, error: e.message };
+            }
+        }
+
+    // === [6] LOG THÀNH CÔNG ===
     console.log(`[PAYMENT] SUCCESS - Reservation ${reservationId} updated:`, {
       oldStatus: currentPaymentStatus,
       newStatus: newPaymentStatus,
@@ -388,7 +409,7 @@ exports.handlePayment = async (req, res) => {
       transactionDescription: matchedTx["Mô tả"]
     });
 
-    return res.status(200).json({
+        return res.status(200).json({
       message: `Payment confirmed via AppScript. Status updated to: ${newPaymentStatus}`,
       reservation: updatedReservation,
       matchedTransaction: matchedTx,
@@ -399,7 +420,8 @@ exports.handlePayment = async (req, res) => {
         paymentType: paymentType,
         oldStatus: currentPaymentStatus,
         newStatus: newPaymentStatus
-      }
+            },
+            allocation
     });
 
   } catch (error) {
@@ -411,6 +433,56 @@ exports.handlePayment = async (req, res) => {
     });
   }
 };
+
+// Allocate rooms for a reservation once deposit/full payment is done
+// Strategy: for each reservation detail, pick `quantity` rooms of the given roomType in the same hotel
+// where status is one of Available/available/Active and mark them as 'Reserved'. Persist to reservedRooms.
+async function allocateRoomsForReservation(reservationDoc) {
+    const reservation = typeof reservationDoc.populate === 'function'
+        ? reservationDoc
+        : await Reservation.findById(reservationDoc._id);
+    if (!reservation) throw new Error('Reservation not found for allocation');
+
+    const details = await ReservationDetail.find({ reservation: reservation._id });
+    let totalAllocated = 0;
+    const picksPerDetail = [];
+
+    for (const d of details) {
+        // if already allocated enough, skip
+        if (Array.isArray(d.reservedRooms) && d.reservedRooms.length >= d.quantity) {
+            picksPerDetail.push({ detailId: d._id, alreadyAllocated: d.reservedRooms.length });
+            continue;
+        }
+
+        const need = d.quantity - (Array.isArray(d.reservedRooms) ? d.reservedRooms.length : 0);
+        if (need <= 0) continue;
+
+        const candidates = await Room.find({
+            hotel: reservation.hotel,
+            roomType: d.roomType,
+            status: { $in: ['Available', 'available', 'Active'] }
+        }).select('_id').limit(need);
+
+        if (candidates.length < need) {
+            picksPerDetail.push({ detailId: d._id, allocated: candidates.length, needed: need });
+            continue; // partial or none; we won't fail the whole flow
+        }
+
+        const pickIds = candidates.map(c => c._id);
+        // mark rooms Reserved
+        await Room.updateMany({ _id: { $in: pickIds } }, { $set: { status: 'Reserved' } });
+        // persist in detail
+        d.reservedRooms = [...(d.reservedRooms || []), ...pickIds];
+        await d.save();
+
+        totalAllocated += pickIds.length;
+        picksPerDetail.push({ detailId: d._id, allocated: pickIds.length });
+    }
+
+    const success = picksPerDetail.every(p => (p.alreadyAllocated ?? 0) + (p.allocated ?? 0) >= (details.find(x => String(x._id) === String(p.detailId))?.quantity || 0));
+
+    return { performed: true, success, totalAllocated, picksPerDetail };
+}
 
 
 // [4] XEM TẤT CẢ ĐƠN ĐẶT PHÒNG (GIỮ NGUYÊN)
@@ -508,7 +580,13 @@ exports.getReservationById = async (req, res) => {
 exports.selectPaymentOption = async (req, res) => {
     try {
         const reservationId = req.params.id;
-        const { paymentType } = req.body; // 'full' hoặc 'deposit'
+        // Be defensive in case body is missing or content-type not set
+        if (!req.body) {
+            return res.status(400).json({
+                message: 'Request body is required. Set Content-Type: application/json and include { "paymentType": "full" | "deposit" }.'
+            });
+        }
+        const paymentType = req.body.paymentType; // 'full' hoặc 'deposit'
 
         // Validate paymentType
         if (!paymentType || !['full', 'deposit'].includes(paymentType)) {

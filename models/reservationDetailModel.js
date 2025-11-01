@@ -8,7 +8,9 @@ const reservationDetailSchema = new mongoose.Schema({
     children: { type: Number, default: 0 },
     infants: { type: Number, default: 0 },
     // selected services for this reservation detail
-    services: [{ service: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' }, quantity: { type: Number, default: 1 } }]
+    services: [{ service: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' }, quantity: { type: Number, default: 1 } }],
+    // rooms pre-allocated upon deposit/full payment
+    reservedRooms: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Room', default: [] }]
 }, { timestamps: true });
 
 module.exports = mongoose.model('ReservationDetail', reservationDetailSchema);

@@ -541,7 +541,7 @@ exports.searchRooms = async (req, res) => {
         }).populate('roomType');
 
         // If no dates provided, return grouped rooms without reservation checks
-        if (!checkInDate || !checkOutDate) {
+    if (!checkInDate || !checkOutDate) {
             const grouped = {};
             allRooms.forEach(room => {
                 const typeId = room.roomType._id.toString();
@@ -566,18 +566,22 @@ exports.searchRooms = async (req, res) => {
                 };
             });
 
-            // Optional filter by numberOfRooms
+            // New logic: show room types even if each type doesn't individually
+            // satisfy numberOfRooms, as long as the total across types does.
             const num = parseInt(numberOfRooms, 10);
-            const filtered = (!isNaN(num) && num > 0)
-                ? results.filter(r => r.available >= num)
-                : results;
+            let list = results.filter(r => r.available > 0);
+            let totalAvailable = list.reduce((sum, r) => sum + (r.available || 0), 0);
+            const meetsRequest = !isNaN(num) && num > 0 ? totalAvailable >= num : true;
 
-            // paginate filtered results
-            const totalCount = filtered.length;
+            // If total meets requested rooms, keep all available types; otherwise keep the list as-is (still >0)
+            // Consumers can use `meetsRequest` to decide UX.
+
+            // paginate
+            const totalCount = list.length;
             const start = (page - 1) * limit;
-            const paged = filtered.slice(start, start + limit);
+            const paged = list.slice(start, start + limit);
 
-            return res.status(200).json({ results: paged, total: totalCount, page, limit });
+            return res.status(200).json({ results: paged, total: totalCount, page, limit, totalAvailable, meetsRequest });
         }
 
         // dates provided -> run existing reservation overlap logic
@@ -632,18 +636,20 @@ exports.searchRooms = async (req, res) => {
             };
         }).filter(item => item.available > 0);
 
-        // Step 5: Optional filter by numberOfRooms
+        // Step 5: New logic – compute combined availability vs requested
         const num = parseInt(numberOfRooms, 10);
-        const filtered = (!isNaN(num) && num > 0)
-            ? results.filter(r => r.available >= num)
-            : results;
+        const totalAvailable = results.reduce((sum, r) => sum + (r.available || 0), 0);
+        const meetsRequest = !isNaN(num) && num > 0 ? totalAvailable >= num : true;
 
-        // paginate filtered results
-        const totalCount = filtered.length;
+        // We no longer hide room types just because each individually < numberOfRooms
+        const list = results; // already filtered to >0 available
+
+        // paginate
+        const totalCount = list.length;
         const start = (page - 1) * limit;
-        const paged = filtered.slice(start, start + limit);
+        const paged = list.slice(start, start + limit);
 
-        res.status(200).json({ results: paged, total: totalCount, page, limit });
+        res.status(200).json({ results: paged, total: totalCount, page, limit, totalAvailable, meetsRequest });
 
   } catch (error) {
     console.error('Error searching rooms:', error);
