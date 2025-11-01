@@ -92,6 +92,9 @@ exports.createHotel = async (req, res) => {
       }
     }
 
+    // Get uploaded image URLs from Cloudinary
+    const images = req.files ? req.files.map(file => file.path) : [];
+
     // Create hotel
     const hotel = new Hotel({
       name,
@@ -99,7 +102,8 @@ exports.createHotel = async (req, res) => {
       email,
       phone,
       description,
-      manager
+      manager,
+      images
     });
 
     await hotel.save();
@@ -155,6 +159,15 @@ exports.updateHotel = async (req, res) => {
             message: 'Selected user is not a hotel-manager'
           });
         }
+      }
+    }
+
+    // Handle image updates - append new images to existing ones
+    if (req.files && req.files.length > 0) {
+      const existingHotel = await Hotel.findById(hotelId);
+      if (existingHotel) {
+        const newImages = req.files.map(file => file.path);
+        updates.images = [...(existingHotel.images || []), ...newImages];
       }
     }
 

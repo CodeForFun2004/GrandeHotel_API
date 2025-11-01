@@ -12,6 +12,7 @@ const {
 } = require('../controllers/hotelAdminController');
 
 const { protect, isAdmin } = require('../middlewares/auth.middleware');
+const { uploadMultiple } = require('../utils/imageUpload');
 
 // All routes require authentication and admin role
 router.use(protect);
@@ -20,8 +21,8 @@ router.use(isAdmin);
 // Hotel CRUD routes
 router.get('/', getAllHotels);
 router.get('/:id', getHotelById);
-router.post('/', createHotel);
-router.put('/:id', updateHotel);
+router.post('/', uploadMultiple, createHotel);
+router.put('/:id', uploadMultiple, updateHotel);
 router.delete('/:id', deleteHotel);
 
 // Manager assignment routes
