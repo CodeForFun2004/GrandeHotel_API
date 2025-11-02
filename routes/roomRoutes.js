@@ -4,19 +4,19 @@ const roomController = require('../controllers/roomController');
 
 const { protect, isAdmin, isHotelManager } = require('../middlewares/auth.middleware');
 
-// Admin Room Type Management Routes - must come BEFORE parameterized routes
-router.get('/types', roomController.getAllRoomTypes); // Remove auth for room types dropdown
-router.get('/types/:id', protect, isHotelManager, roomController.getRoomTypeById);
-router.post('/types', protect, isHotelManager, roomController.createRoomType);
+// Room Type Management Routes - global/shared (require auth, but for any user)
+router.get('/types', protect, roomController.getAllRoomTypes); // Any authenticated user can see room types
+router.get('/types/:id', protect, roomController.getRoomTypeById);
+router.post('/types', protect, isHotelManager, roomController.createRoomType); // Only managers can modify
 router.put('/types/:id', protect, isHotelManager, roomController.updateRoomType);
 router.delete('/types/:id', protect, isHotelManager, roomController.deleteRoomType);
 
-// Admin Room Management Routes (formatted for frontend)
-router.get('/', protect, isHotelManager, roomController.getAdminRooms);
-router.get('/:id', protect,isHotelManager, roomController.getRoomById);
-router.post('/', protect, isHotelManager, roomController.createAdminRoom);
-router.put('/:id', protect, isHotelManager, roomController.updateAdminRoom);
-router.delete('/:id', protect, isHotelManager, roomController.deleteAdminRoom);
+// Room Management Routes (for hotel managers - check permissions)
+router.get('/', protect, isHotelManager, roomController.getAllRooms);
+router.get('/:id', protect, isHotelManager, roomController.getRoomById);
+router.post('/', protect, isHotelManager, roomController.createRoom);
+router.put('/:id', protect, isHotelManager, roomController.updateRoom);
+router.delete('/:id', protect, isHotelManager, roomController.deleteRoom);
 
 // Legacy Routes (kept for compatibility)
 // Uncomment if needed for non-admin usage
@@ -34,6 +34,7 @@ router.use('/types', (req, res, next) => {
   // Allow the /types routes to be accessed
   next();
 });
+
 
 
 module.exports = router;

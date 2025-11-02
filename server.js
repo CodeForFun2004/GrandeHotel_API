@@ -19,12 +19,17 @@ const passwordRoutes = require('./routes/password.routes');
 const reservationRoutes = require('./routes/reservationRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 
-const roomTypeRoutes = require('./routes/roomTypeRoutes');
+
 
 const roomController = require('./controllers/roomController');
-
 const hotelRoutes = require('./routes/hotelRoutes');
 const managerUserRoutes = require('./routes/managerUserRoutes');
+const contactRoutes = require('./routes/contact.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
+const roomTypesRoutes = require('./routes/roomTypesRoutes');
+const favoriteRoutes = require('./routes/favoriteRoutes');
+const chatbotRoutes = require('./routes/chatbot.routes');
+
 
 
 const app = express();
@@ -54,10 +59,21 @@ app.use('/api/password', passwordRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
-app.use('/api/room-types', roomTypeRoutes);
+
 app.use('/api/admin/managers', managerUserRoutes);
+<<<<<<< HEAD
 // app.use('/api/chatbot', chatbotRoutes);
 app.get('/api/roomtypes', roomController.getAllRoomTypes);
+=======
+
+
+app.use('/api/contacts', contactRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/room-types', roomTypesRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/chatbot', chatbotRoutes);
+>>>>>>> 7ae36812cde54efe8d4c65017884ddbf25e56548
+
 
 const PORT = process.env.PORT || 1000;
 
