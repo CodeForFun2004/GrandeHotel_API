@@ -6,11 +6,20 @@ const {
   getHotelPerformance,
   getBookingStatus,
   getUserStats,
-  getRecentActivities
+  getRecentActivities,
+  searchReservationsForCheckIn,
+  getReservationForCheckIn,
+  confirmCheckIn,
+  findStayByRoomNumberForCheckout,
+  createCheckoutPayment,
+  confirmCheckout,
+  addServiceToRoomInStay,
+  listHotelServices,
+  verifyCheckoutPayment
 } = require('../controllers/dashboardController');
 
 // Middleware imports
-const { protect, isAdmin } = require('../middlewares/auth.middleware');
+const { protect, isAdmin, isStaff, isHotelManager } = require('../middlewares/auth.middleware');
 
 // All dashboard routes are protected and admin-only
 router.get('/stats', protect, isAdmin, getDashboardStats);
@@ -19,5 +28,20 @@ router.get('/hotels/performance', protect, isAdmin, getHotelPerformance);
 router.get('/bookings/status', protect, isAdmin, getBookingStatus);
 router.get('/users/stats', protect, isAdmin, getUserStats);
 router.get('/activities/recent', protect, isAdmin, getRecentActivities);
+
+// Check-in workflow
+router.get('/checkin/search', protect, isHotelManager, searchReservationsForCheckIn);
+router.get('/checkin/:id', protect, isHotelManager, getReservationForCheckIn);
+router.post('/checkin/:id/confirm', protect, isHotelManager, confirmCheckIn);
+
+// Checkout workflow
+router.get('/checkout/find-room', protect, isStaff, findStayByRoomNumberForCheckout);
+router.post('/checkout/:stayId/create-payment', protect, isStaff, createCheckoutPayment);
+router.post('/checkout/:stayId/verify-payment', protect, isStaff, verifyCheckoutPayment);
+router.post('/checkout/:stayId/confirm', protect, isStaff, confirmCheckout);
+
+// Stay service management
+router.post('/stays/:stayId/rooms/:roomId/services', protect, isStaff, addServiceToRoomInStay);
+router.get('/hotels/:hotelId/services', protect, isStaff, listHotelServices);
 
 module.exports = router;

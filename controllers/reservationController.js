@@ -8,7 +8,11 @@ const ReservationDetail = require('../models/reservationDetailModel');
 const Payment = require('../models/paymentModel');
 const RoomType = require('../models/roomTypeModel');
 const Service = require('../models/serviceModel');
+
+const Room = require('../models/roomModel');
+
 const Conversation = require('../models/conversation');
+
 // const Voucher = require('../models/voucherModel'); // Nếu có
 
 // Assuming you have dotenv or similar setup for environment variables
@@ -72,7 +76,8 @@ exports.createReservation = async (req, res) => {
                     const serv = await Service.findById(s.serviceId);
                     if (!serv) continue;
                     const sqty = Math.max(1, Number(s.quantity || 1));
-                    detailTotal += Number(serv.price || 0) * sqty; 
+                    // Use Service.basePrice defined in serviceModel
+                    detailTotal += Number(serv.basePrice || 0) * sqty; 
                     serviceEntries.push({ service: serv._id, quantity: sqty });
                 }
             }
@@ -486,10 +491,20 @@ exports.handlePayment = async (req, res) => {
       { new: true }
     );
 
-    // Populate payment vào reservation
-    const updatedReservation = await Reservation.findById(reservationId).populate('payment');
+        // Populate payment vào reservation
+        const updatedReservation = await Reservation.findById(reservationId).populate('payment');
 
-    // === [5] LOG THÀNH CÔNG ===
+        // === [4.1] PHÂN BỔ PHÒNG KHI ĐẶT CỌC/THANH TOÁN ĐỦ ===
+        let allocation = null;
+        if (newPaymentStatus === 'deposit_paid' || newPaymentStatus === 'fully_paid') {
+            try {
+                allocation = await allocateRoomsForReservation(updatedReservation);
+            } catch (allocErr) {
+                console.warn('[PAYMENT] Allocation failed:', allocErr.message);
+            }
+        }
+
+        // === [5] LOG THÀNH CÔNG ===
     console.log(`[PAYMENT] SUCCESS - Reservation ${reservationId} updated:`, {
       oldStatus: currentPaymentStatus,
       newStatus: newPaymentStatus,
@@ -499,19 +514,19 @@ exports.handlePayment = async (req, res) => {
       depositAmount: depositAmount,
       transactionDescription: matchedTx["Mô tả"]
     });
-
         return res.status(200).json({
-      message: `Payment confirmed via AppScript. Status updated to: ${newPaymentStatus}`,
+            message: `Payment confirmed via AppScript. Status updated to: ${newPaymentStatus}`,
             reservation: updatedReservation,
-      matchedTransaction: matchedTx,
-      paymentDetails: {
-        paidAmount: newPaidAmount,
-        totalPrice: totalPrice,
-        depositAmount: depositAmount,
-        paymentType: paymentType,
-        oldStatus: currentPaymentStatus,
-        newStatus: newPaymentStatus
-      }
+            matchedTransaction: matchedTx,
+            paymentDetails: {
+                paidAmount: newPaidAmount,
+                totalPrice: totalPrice,
+                depositAmount: depositAmount,
+                paymentType: paymentType,
+                oldStatus: currentPaymentStatus,
+                newStatus: newPaymentStatus
+            },
+            allocation
         });
 
     } catch (error) {
@@ -524,13 +539,63 @@ exports.handlePayment = async (req, res) => {
   }
 };
 
+// Allocate rooms for a reservation once deposit/full payment is done
+// Strategy: for each reservation detail, pick `quantity` rooms of the given roomType in the same hotel
+// where status is one of Available/available/Active and mark them as 'Reserved'. Persist to reservedRooms.
+async function allocateRoomsForReservation(reservationDoc) {
+    const reservation = typeof reservationDoc.populate === 'function'
+        ? reservationDoc
+        : await Reservation.findById(reservationDoc._id);
+    if (!reservation) throw new Error('Reservation not found for allocation');
+
+    const details = await ReservationDetail.find({ reservation: reservation._id });
+    let totalAllocated = 0;
+    const picksPerDetail = [];
+
+    for (const d of details) {
+        // if already allocated enough, skip
+        if (Array.isArray(d.reservedRooms) && d.reservedRooms.length >= d.quantity) {
+            picksPerDetail.push({ detailId: d._id, alreadyAllocated: d.reservedRooms.length });
+            continue;
+        }
+
+        const need = d.quantity - (Array.isArray(d.reservedRooms) ? d.reservedRooms.length : 0);
+        if (need <= 0) continue;
+
+        const candidates = await Room.find({
+            hotel: reservation.hotel,
+            roomType: d.roomType,
+            status: { $in: ['Available', 'available', 'Active'] }
+        }).select('_id').limit(need);
+
+        if (candidates.length < need) {
+            picksPerDetail.push({ detailId: d._id, allocated: candidates.length, needed: need });
+            continue; // partial or none; we won't fail the whole flow
+        }
+
+        const pickIds = candidates.map(c => c._id);
+        // mark rooms Reserved
+        await Room.updateMany({ _id: { $in: pickIds } }, { $set: { status: 'Reserved' } });
+        // persist in detail
+        d.reservedRooms = [...(d.reservedRooms || []), ...pickIds];
+        await d.save();
+
+        totalAllocated += pickIds.length;
+        picksPerDetail.push({ detailId: d._id, allocated: pickIds.length });
+    }
+
+    const success = picksPerDetail.every(p => (p.alreadyAllocated ?? 0) + (p.allocated ?? 0) >= (details.find(x => String(x._id) === String(p.detailId))?.quantity || 0));
+
+    return { performed: true, success, totalAllocated, picksPerDetail };
+}
+
 
 // [4] XEM TẤT CẢ ĐƠN ĐẶT PHÒNG (GIỮ NGUYÊN)
 exports.getAllReservations = async (req, res) => {
     try {
         const reservations = await Reservation.find()
             .populate('hotel', 'name address')
-            .populate('customer', 'name email phone')
+            .populate('customer', 'fullname username email phone')
             .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details', 
@@ -557,7 +622,7 @@ exports.getReservationById = async (req, res) => {
         const reservationId = req.params.id;
         const reservation = await Reservation.findById(reservationId)
             .populate('hotel', 'name address description')
-            .populate('customer', 'name email phone address')
+            .populate('customer', 'fullname username email phone address')
             .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details',
@@ -628,7 +693,13 @@ exports.getReservationById = async (req, res) => {
 exports.selectPaymentOption = async (req, res) => {
     try {
         const reservationId = req.params.id;
-        const { paymentType } = req.body; // 'full' hoặc 'deposit'
+        // Be defensive in case body is missing or content-type not set
+        if (!req.body) {
+            return res.status(400).json({
+                message: 'Request body is required. Set Content-Type: application/json and include { "paymentType": "full" | "deposit" }.'
+            });
+        }
+        const paymentType = req.body.paymentType; // 'full' hoặc 'deposit'
 
         console.log(`[PAYMENT_OPTION] Request received:`, {
             reservationId: reservationId,
@@ -729,7 +800,7 @@ exports.updateReservationStatus = async (req, res) => {
         }
         
         // Logic hủy đơn cần xử lý hoàn tiền nếu status: 'canceled'
-        if (status === 'canceled' && reservation.paymentStatus !== 'unpaid') {
+        if (status === 'canceled' && reservation.payment?.paymentStatus !== 'unpaid') {
             // NOTE: Cần thêm logic hoàn tiền (tạo bản ghi Refunding_Reservation)
             // Cập nhật paymentStatus nếu cần
             // Ví dụ: await Reservation.findByIdAndUpdate(reservationId, { paymentStatus: 'refunded' });

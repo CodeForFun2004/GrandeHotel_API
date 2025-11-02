@@ -4,11 +4,9 @@ const roomSchema = new mongoose.Schema({
     roomType: { type: mongoose.Schema.Types.ObjectId, ref: 'RoomType', required: true },
     hotel: { type: mongoose.Schema.Types.ObjectId, ref: 'Hotel', required: true },
     roomNumber: { type: String, required: true },
-    name: { type: String, required: true },
-    status: { type: String, enum: ['Active', 'Inactive', 'Maintenance'], default: 'Active' },
+    status: { type: String, enum: ['Reserved', 'Available', 'Maintenance','Cleaning','Occupied'], default: 'Available' },
     description: String,
     pricePerNight: { type: Number, required: true },
-    capacity: { type: Number, required: true },
     images: [String],
     code: { type: String, required: true } // Unique code for room
 }, { timestamps: true });

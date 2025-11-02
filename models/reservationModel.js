@@ -14,7 +14,6 @@ const reservationSchema = new mongoose.Schema({
         required: false, // Cho phép null cho guest
         index: true 
     },
-    
     // --- THÔNG TIN ĐẶT PHÒNG ---
     checkInDate: { 
         type: Date, 
@@ -36,6 +35,18 @@ const reservationSchema = new mongoose.Schema({
         default: 'pending',
         index: true 
     },
+
+    // --- TRẠNG THÁI LƯU TRÚ (CHECK-IN/CHECK-OUT) ---
+    stayStatus: {
+        type: String,
+        enum: ['not_checked_in', 'checked_in', 'checked_out'],
+        default: 'not_checked_in',
+        index: true
+    },
+    checkedInAt: { type: Date, default: null },
+    checkedOutAt: { type: Date, default: null },
+    checkedInBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    checkedOutBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 
     // --- XÁC THỰC CHECK-IN BẰNG QR CODE ---
     qrCodeToken: { // Token duy nhất để tạo mã QR cho Check-in
