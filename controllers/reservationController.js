@@ -1,22 +1,15 @@
 // Giả định thư viện Mongoose Models đã được import
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-// `node-fetch` v3 is ESM and exposes the fetch function as the default export when required.
-// Use a resilient import: prefer global fetch (Node18+), otherwise use node-fetch default.
-let fetch;
-try {
-    fetch = global.fetch || (require('node-fetch').default ? require('node-fetch').default : require('node-fetch'));
-} catch (e) {
-    // Fallback: try require('node-fetch') directly
-    try { fetch = require('node-fetch'); } catch (err) { fetch = null; }
-}
+// Node.js 18+ có fetch built-in, không cần node-fetch
+// Nếu Node.js < 18, có thể cần cài node-fetch v2: npm install node-fetch@2
 const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
+const Payment = require('../models/paymentModel');
 const RoomType = require('../models/roomTypeModel');
 const Service = require('../models/serviceModel');
 const Room = require('../models/roomModel');
 // const Voucher = require('../models/voucherModel'); // Nếu có
-// const Payment = require('../models/paymentModel'); // Nếu có
 
 // Assuming you have dotenv or similar setup for environment variables
 require('dotenv').config();
@@ -48,8 +41,15 @@ exports.createReservation = async (req, res) => {
         } = req.body;
 
         // Basic validation
-        if (!hotelId || !customerId || !checkInDate || !checkOutDate || !rooms || rooms.length === 0) {
+        if (!hotelId || !checkInDate || !checkOutDate || !rooms || rooms.length === 0) {
             return res.status(400).json({ message: 'Missing required reservation information.' });
+        }
+
+        // Xử lý trường hợp guest (không có customerId)
+        let finalCustomerId = customerId;
+        if (customerId === "guest" || !customerId) {
+            // Tạo một ObjectId tạm thời cho guest hoặc sử dụng null
+            finalCustomerId = null; // Hoặc tạo ObjectId mới: new mongoose.Types.ObjectId()
         }
 
         // --- BƯỚC 1: TÍNH TOÁN TỔNG GIÁ ---
@@ -99,29 +99,38 @@ exports.createReservation = async (req, res) => {
         // --- BƯỚC 3: TẠO RESERVATION ---
         const reservation = await Reservation.create({
             hotel: hotelId,
-            customer: customerId,
+            customer: finalCustomerId,
             checkInDate,
             checkOutDate,
             numberOfGuests,
-            totalPrice,
-            depositAmount: requiredDeposit, // Lưu 50% tổng giá trị
             status: 'pending', 
-            paymentStatus: 'unpaid',
         });
 
-        // --- BƯỚC 4: TẠO RESERVATION DETAILS ---
+        // --- BƯỚC 4: TẠO PAYMENT ---
+        const payment = await Payment.create({
+            reservation: reservation._id,
+            totalPrice,
+            depositAmount: requiredDeposit, // Lưu 50% tổng giá trị
+            paymentStatus: 'unpaid',
+            paidAmount: 0
+        });
+
+        // --- BƯỚC 5: TẠO RESERVATION DETAILS ---
         const detailsWithReservation = detailsToInsert.map(d => ({ reservation: reservation._id, ...d }));
         await ReservationDetail.insertMany(detailsWithReservation);
         
-         // --- BƯỚC 5: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
+        // --- BƯỚC 6: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
          // Sử dụng ID đơn giản để tránh lỗi URL encoding
          const transferContent = reservation._id.toString().slice(-6); // Chỉ lấy 6 ký tự cuối
-         const vietQRLink = await generateVietQR(
-             process.env.MY_BANK_CODE, 
-             process.env.MY_ACCOUNT_NUMBER, 
-             amountToPay, 
+        const vietQRLink = await generateVietQR(
+            process.env.MY_BANK_CODE, 
+            process.env.MY_ACCOUNT_NUMBER, 
+            amountToPay, 
              transferContent 
-         );
+        );
+
+        // Populate payment vào reservation để trả về
+        await reservation.populate('payment');
 
         return res.status(201).json({
             message: 'Reservation created successfully and is pending approval.',
@@ -168,8 +177,8 @@ exports.approveReservation = async (req, res) => {
         let updateData = {};
 
         if (action === 'approve') {
-            // Tạo QR Code Token Check-in khi APPROVED
-            const checkinToken = generateCheckinToken(); 
+        // Tạo QR Code Token Check-in khi APPROVED
+        const checkinToken = generateCheckinToken(); 
             updateData = {
                 status: 'approved',
                 qrCodeToken: checkinToken,
@@ -208,21 +217,29 @@ exports.approveReservation = async (req, res) => {
 
 // [3] XÁC NHẬN THANH TOÁN (KẾT HỢP VỚI APPSCRIPT)
 exports.handlePayment = async (req, res) => {
-  try {
-    const reservationId = req.params.id;
+    try {
+        const reservationId = req.params.id;
 
-    const reservation = await Reservation.findById(reservationId);
+    const reservation = await Reservation.findById(reservationId).populate('payment');
     if (!reservation) {
       console.log(`[PAYMENT] Reservation not found: ${reservationId}`);
       return res.status(404).json({ message: "Reservation not found." });
     }
     
+    // Kiểm tra payment có tồn tại không
+    if (!reservation.payment) {
+      console.log(`[PAYMENT] Payment not found for reservation: ${reservationId}`);
+      return res.status(404).json({ message: "Payment information not found for this reservation." });
+    }
+    
+    const payment = reservation.payment;
+    
     console.log(`[PAYMENT] Reservation found:`, {
       id: reservation._id,
       status: reservation.status,
-      totalPrice: reservation.totalPrice,
-      depositAmount: reservation.depositAmount,
-      paymentStatus: reservation.paymentStatus
+      totalPrice: payment.totalPrice,
+      depositAmount: payment.depositAmount,
+      paymentStatus: payment.paymentStatus
     });
 
     if (reservation.status !== "approved") {
@@ -234,16 +251,61 @@ exports.handlePayment = async (req, res) => {
     console.log(`[PAYMENT] Checking payment for reservation: ${reservationId}`);
 
     // === [1] GỌI APPSCRIPT ===
-    const scriptUrl = process.env.APPSCRIPT_URL || "https://script.google.com/macros/s/AKfycbzdsHg633hzp9lZtWIUX7fTgBc17mqPV_DNYHZKVfl0KPZdwjG72sGpHiIVZTfyjpiM_Q/exec";
+    const scriptUrl = process.env.APPSCRIPT_URL || "https://script.google.com/a/macros/fpt.edu.vn/s/AKfycbz1MKWMTywURK2WyT5kBCduwNBrxUOvaFI0KRZW5Wd8w5UtmXzuihUmxFGJwtNNIpx5qw/exec";
 
-    const response = await fetch(scriptUrl);
+    console.log(`[PAYMENT] Calling AppScript URL: ${scriptUrl}`);
+    
+    // Gọi AppScript với redirect follow và kiểm tra response
+    const response = await fetch(scriptUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'Accept': 'application/json',
+      }
+    });
+    
+    // Kiểm tra status code
     if (!response.ok) {
-      console.error(`[PAYMENT] AppScript fetch failed: ${response.status}`);
-      throw new Error("Failed to fetch AppScript data");
+      const errorText = await response.text();
+      console.error(`[PAYMENT] AppScript fetch failed:`, {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get('content-type'),
+        responsePreview: errorText.substring(0, 500)
+      });
+      throw new Error(`Failed to fetch AppScript data: ${response.status} ${response.statusText}`);
     }
 
-    const result = await response.json();
-    const transactions = result.data;
+    // Kiểm tra Content-Type trước khi parse JSON
+    const contentType = response.headers.get('content-type') || '';
+    console.log(`[PAYMENT] AppScript response Content-Type: ${contentType}`);
+    
+    if (!contentType.includes('application/json')) {
+      // Nếu không phải JSON, log để debug
+      const responseText = await response.text();
+      console.error(`[PAYMENT] AppScript returned non-JSON response:`, {
+        contentType: contentType,
+        responsePreview: responseText.substring(0, 500),
+        responseLength: responseText.length
+      });
+      
+      // Thử parse nếu có thể (một số AppScript trả về JSON nhưng Content-Type sai)
+      try {
+        const result = JSON.parse(responseText);
+        if (result && result.data) {
+          console.log(`[PAYMENT] Successfully parsed JSON despite wrong Content-Type`);
+          var transactions = result.data;
+        } else {
+          throw new Error("AppScript response is not valid JSON. Check AppScript deployment settings.");
+        }
+      } catch (parseError) {
+        throw new Error(`AppScript returned HTML instead of JSON. Please check AppScript deployment settings. Response preview: ${responseText.substring(0, 200)}`);
+      }
+    } else {
+      // Parse JSON bình thường
+      const result = await response.json();
+      var transactions = result.data;
+    }
 
     console.log(`[PAYMENT] Retrieved ${transactions.length} transactions from AppScript`);
 
@@ -254,81 +316,96 @@ exports.handlePayment = async (req, res) => {
     console.log(`[PAYMENT] Looking for reservation code: ${reservationCode}`);
     console.log(`[PAYMENT] Looking for full reservation ID: ${fullReservationId}`);
     console.log(`[PAYMENT] Reservation details:`, {
-      totalPrice: reservation.totalPrice,
-      depositAmount: reservation.depositAmount,
-      paymentStatus: reservation.paymentStatus
+      totalPrice: payment.totalPrice,
+      depositAmount: payment.depositAmount,
+      paymentStatus: payment.paymentStatus
     });
     
     // Tìm giao dịch matching theo thứ tự ưu tiên
+    // QUAN TRỌNG: Phải có mã reservation trong mô tả để đảm bảo an toàn
     let matchedTx = null;
     
-    // 1. Tìm giao dịch có chứa "THANH" (từ QR code)
+    // 1. Ưu tiên: Tìm giao dịch có chứa "THANH" VÀ mã reservation (từ QR code)
     matchedTx = transactions.find((tx) => {
       const description = (tx["Mô tả"] || "").toUpperCase();
       const amount = Number(tx["Giá trị"] || 0);
+      const hasThanh = description.includes("THANH");
+      const hasReservationCode = description.includes(reservationCode) || description.includes(fullReservationId);
       
       console.log(`[PAYMENT] Checking transaction:`, {
         description: description,
         amount: amount,
-        containsTHANH: description.includes("THANH")
+        hasThanh: hasThanh,
+        hasReservationCode: hasReservationCode,
+        reservationCode: reservationCode
       });
       
-      // Ưu tiên tìm giao dịch có chứa "THANH"
-      return description.includes("THANH");
+      // Phải có CẢ "THANH" VÀ mã reservation
+      return hasThanh && hasReservationCode && amount > 0;
     });
     
-    // 2. Nếu không tìm thấy, tìm theo mã reservation
+    // 2. Nếu không tìm thấy, tìm theo mã reservation (không cần "THANH")
+    // Ưu tiên fullReservationId trước (chính xác hơn), sau đó mới đến reservationCode
     if (!matchedTx) {
+      // Ưu tiên 1: Tìm theo fullReservationId (chính xác nhất)
       matchedTx = transactions.find((tx) => {
         const description = (tx["Mô tả"] || "").toUpperCase();
         const amount = Number(tx["Giá trị"] || 0);
+        const hasFullId = description.includes(fullReservationId);
         
-        return (description.includes(reservationCode) || description.includes(fullReservationId)) && amount > 0;
-      });
-    }
-    
-    // 3. Tạm thời: chấp nhận giao dịch đầu tiên để test
-    if (!matchedTx && transactions.length > 0) {
-      console.log(`[PAYMENT] No matching transaction found, using first transaction for testing...`);
-      matchedTx = transactions[0];
-    }
-    
-    // 2. Nếu không tìm thấy, tìm theo số tiền gần đúng (cho trường hợp không có mã trong mô tả)
-    if (!matchedTx) {
-      console.log(`[PAYMENT] No reservation code found, checking by amount...`);
-      
-      // Lấy giao dịch gần đây nhất có số tiền hợp lý
-      const recentTx = transactions.find((tx) => {
-        const amount = Number(tx["Giá trị"] || 0);
-        console.log(`[PAYMENT] Checking amount: ${amount} >= ${reservation.depositAmount}?`);
-        return amount >= reservation.depositAmount; // Ít nhất phải bằng số tiền cọc
-      });
-      
-      if (recentTx) {
-        console.log(`[PAYMENT] Found transaction by amount:`, {
-          description: recentTx["Mô tả"],
-          amount: recentTx["Giá trị"],
-          reservationDepositAmount: reservation.depositAmount
+        console.log(`[PAYMENT] Checking transaction by full reservation ID:`, {
+          description: description,
+          amount: amount,
+          hasFullId: hasFullId,
+          fullReservationId: fullReservationId
         });
-        matchedTx = recentTx;
-      } else {
-        // Tạm thời: lấy giao dịch gần nhất để test
-        console.log(`[PAYMENT] No transaction found by amount, using latest transaction for testing...`);
-        if (transactions.length > 0) {
-          matchedTx = transactions[0];
-          console.log(`[PAYMENT] Using latest transaction for testing:`, {
-            description: matchedTx["Mô tả"],
-            amount: matchedTx["Giá trị"]
+        
+        return hasFullId && amount > 0;
+      });
+      
+      // Ưu tiên 2: Nếu không tìm thấy, tìm theo reservationCode (6 ký tự cuối)
+      if (!matchedTx) {
+        matchedTx = transactions.find((tx) => {
+          const description = (tx["Mô tả"] || "").toUpperCase();
+          const amount = Number(tx["Giá trị"] || 0);
+          const hasReservationCode = description.includes(reservationCode);
+          
+          console.log(`[PAYMENT] Checking transaction by reservation code (6 chars):`, {
+            description: description,
+            amount: amount,
+            hasReservationCode: hasReservationCode,
+            reservationCode: reservationCode
           });
-        }
+          
+          // QUAN TRỌNG: Phải có mã reservation trong mô tả
+          return hasReservationCode && amount > 0;
+        });
       }
     }
+    
+    // KHÔNG tìm theo số tiền nếu không có mã reservation - ĐÂY LÀ NGUYÊN NHÂN LỖI
+    // Logic cũ: tìm theo số tiền chính xác → CÓ THỂ NHẬN NHẦM GIAO DỊCH CỦA RESERVATION KHÁC
+    // Logic mới: CHỈ chấp nhận nếu có mã reservation trong mô tả để đảm bảo an toàn
 
     if (!matchedTx) {
       console.log(`[PAYMENT] No matching transaction found for reservation: ${reservationId}`);
-      return res.status(400).json({
-        message: "No matching payment found in Google Sheet.",
+      console.log(`[PAYMENT] Looking for:`, {
         reservationCode: reservationCode,
+        fullReservationId: fullReservationId,
+        totalPrice: payment.totalPrice,
+        depositAmount: payment.depositAmount
+      });
+      console.log(`[PAYMENT] Total transactions checked: ${transactions.length}`);
+      
+      return res.status(400).json({
+        message: "No matching payment found in Google Sheet. The transaction description must contain the reservation code.",
+        reservationCode: reservationCode,
+        fullReservationId: fullReservationId,
+        expectedAmounts: {
+          totalPrice: payment.totalPrice,
+          depositAmount: payment.depositAmount
+        },
+        hint: "Make sure the bank transfer description contains the reservation code (last 6 characters) or full reservation ID.",
         lastTransactions: transactions.slice(0, 5), // Chỉ trả về 5 giao dịch gần nhất để debug
       });
     }
@@ -341,33 +418,35 @@ exports.handlePayment = async (req, res) => {
 
     // === [3] LOGIC KIỂM TOÁN VÀ CẬP NHẬT TRẠNG THÁI ===
     const paidAmount = Number(matchedTx["Giá trị"]);
-    const totalPrice = reservation.totalPrice;
-    const depositAmount = reservation.depositAmount;
-    const currentPaymentStatus = reservation.paymentStatus;
+    const totalPrice = payment.totalPrice;
+    const depositAmount = payment.depositAmount;
+    const currentPaymentStatus = payment.paymentStatus;
 
     let newPaymentStatus;
     let paymentType;
+    let newPaidAmount = payment.paidAmount + paidAmount; // Cộng dồn số tiền đã thanh toán
 
     // Logic kiểm toán đơn giản: chỉ có 2 option (full hoặc 50%)
-    if (paidAmount >= totalPrice) {
+    if (newPaidAmount >= totalPrice) {
       // Option 1: Thanh toán toàn bộ (full payment)
       newPaymentStatus = "fully_paid";
       paymentType = "full_payment";
-      console.log(`[PAYMENT] Full payment detected: ${paidAmount} >= ${totalPrice}`);
-    } else if (paidAmount >= depositAmount) {
+      newPaidAmount = totalPrice; // Đảm bảo không vượt quá totalPrice
+      console.log(`[PAYMENT] Full payment detected: ${newPaidAmount} >= ${totalPrice}`);
+    } else if (newPaidAmount >= depositAmount) {
       // Option 2: Thanh toán cọc 50%
       newPaymentStatus = "deposit_paid";
       paymentType = "deposit_payment";
-      console.log(`[PAYMENT] Deposit payment detected: ${paidAmount} >= ${depositAmount}`);
+      console.log(`[PAYMENT] Deposit payment detected: ${newPaidAmount} >= ${depositAmount}`);
     } else {
       // Số tiền không đủ cho cả 2 option
       newPaymentStatus = "partially_paid";
       paymentType = "insufficient_payment";
-      console.log(`[PAYMENT] Insufficient payment: ${paidAmount} < ${depositAmount} (minimum deposit required)`);
+      console.log(`[PAYMENT] Insufficient payment: ${newPaidAmount} < ${depositAmount} (minimum deposit required)`);
     }
 
     // Nếu không thay đổi trạng thái thì trả về luôn
-    if (newPaymentStatus === currentPaymentStatus) {
+    if (newPaymentStatus === currentPaymentStatus && newPaidAmount === payment.paidAmount) {
       console.log(`[PAYMENT] Payment status unchanged: ${currentPaymentStatus}`);
       return res.status(200).json({
         message: "Payment status unchanged.",
@@ -377,33 +456,26 @@ exports.handlePayment = async (req, res) => {
       });
     }
 
-    // === [4] CẬP NHẬT RESERVATION ===
-    const updatedReservation = await Reservation.findByIdAndUpdate(
-      reservationId,
+    // === [4] CẬP NHẬT PAYMENT ===
+    const updatedPayment = await Payment.findByIdAndUpdate(
+      payment._id,
       { 
         paymentStatus: newPaymentStatus,
+        paidAmount: newPaidAmount,
         updatedAt: new Date()
       },
       { new: true }
     );
 
-        // === [5] ALLOCATE ROOMS WHEN DEPOSIT OR FULLY PAID ===
-        let allocation = { performed: false };
-        if (['deposit_paid', 'fully_paid'].includes(newPaymentStatus)) {
-            try {
-                allocation = await allocateRoomsForReservation(updatedReservation);
-            } catch (e) {
-                console.error('[ALLOCATE] Failed to allocate rooms:', e.message);
-                allocation = { performed: true, success: false, error: e.message };
-            }
-        }
+    // Populate payment vào reservation
+    const updatedReservation = await Reservation.findById(reservationId).populate('payment');
 
-    // === [6] LOG THÀNH CÔNG ===
+    // === [5] LOG THÀNH CÔNG ===
     console.log(`[PAYMENT] SUCCESS - Reservation ${reservationId} updated:`, {
       oldStatus: currentPaymentStatus,
       newStatus: newPaymentStatus,
       paymentType: paymentType,
-      paidAmount: paidAmount,
+      paidAmount: newPaidAmount,
       totalPrice: totalPrice,
       depositAmount: depositAmount,
       transactionDescription: matchedTx["Mô tả"]
@@ -411,10 +483,10 @@ exports.handlePayment = async (req, res) => {
 
         return res.status(200).json({
       message: `Payment confirmed via AppScript. Status updated to: ${newPaymentStatus}`,
-      reservation: updatedReservation,
+            reservation: updatedReservation,
       matchedTransaction: matchedTx,
       paymentDetails: {
-        paidAmount: paidAmount,
+        paidAmount: newPaidAmount,
         totalPrice: totalPrice,
         depositAmount: depositAmount,
         paymentType: paymentType,
@@ -422,9 +494,9 @@ exports.handlePayment = async (req, res) => {
         newStatus: newPaymentStatus
             },
             allocation
-    });
+        });
 
-  } catch (error) {
+    } catch (error) {
     console.error(`[PAYMENT] ERROR processing payment for reservation ${req.params.id}:`, error);
     res.status(500).json({ 
       message: "Internal server error.", 
@@ -491,6 +563,7 @@ exports.getAllReservations = async (req, res) => {
         const reservations = await Reservation.find()
             .populate('hotel', 'name address')
             .populate('customer', 'name email phone')
+            .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details', 
                 populate: { 
@@ -517,6 +590,7 @@ exports.getReservationById = async (req, res) => {
         const reservation = await Reservation.findById(reservationId)
             .populate('hotel', 'name address description')
             .populate('customer', 'name email phone address')
+            .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details',
                 populate: { 
@@ -529,28 +603,34 @@ exports.getReservationById = async (req, res) => {
             return res.status(404).json({ message: 'Reservation not found.' });
         }
 
+        // Kiểm tra payment có tồn tại không
+        if (!reservation.payment) {
+            return res.status(404).json({ message: 'Payment information not found for this reservation.' });
+        }
+
+        const payment = reservation.payment;
+
         // Hiển thị payment options thay vì tự động generate QR
         let paymentOptions = null;
         if (reservation.status === 'approved') {
             // Chỉ khi được approve thì mới hiển thị payment options
-            const DEPOSIT_PERCENTAGE = 0.5;
-            const requiredDeposit = Math.ceil(reservation.totalPrice * DEPOSIT_PERCENTAGE);
-            
             paymentOptions = {
-                reservationTotal: reservation.totalPrice,
-                depositAmount: requiredDeposit,
-                currentPaymentStatus: reservation.paymentStatus,
+                reservationTotal: payment.totalPrice,
+                depositAmount: payment.depositAmount,
+                currentPaymentStatus: payment.paymentStatus,
+                paidAmount: payment.paidAmount,
+                remainingAmount: payment.remainingAmount,
                 availableOptions: []
             };
 
             // Xác định các payment options có sẵn
-            if (reservation.paymentStatus === 'unpaid') {
+            if (payment.paymentStatus === 'unpaid') {
                 paymentOptions.availableOptions = [
-                    { type: 'deposit', amount: requiredDeposit, description: 'Thanh toán cọc 50%' },
-                    { type: 'full', amount: reservation.totalPrice, description: 'Thanh toán toàn bộ 100%' }
+                    { type: 'deposit', amount: payment.depositAmount, description: 'Thanh toán cọc 50%' },
+                    { type: 'full', amount: payment.totalPrice, description: 'Thanh toán toàn bộ 100%' }
                 ];
-            } else if (reservation.paymentStatus === 'deposit_paid') {
-                const remainingAmount = reservation.totalPrice - requiredDeposit;
+            } else if (payment.paymentStatus === 'deposit_paid') {
+                const remainingAmount = payment.totalPrice - payment.depositAmount;
                 paymentOptions.availableOptions = [
                     { type: 'full', amount: remainingAmount, description: `Thanh toán phần còn lại (${remainingAmount.toLocaleString()} VND)` }
                 ];
@@ -588,15 +668,29 @@ exports.selectPaymentOption = async (req, res) => {
         }
         const paymentType = req.body.paymentType; // 'full' hoặc 'deposit'
 
+        console.log(`[PAYMENT_OPTION] Request received:`, {
+            reservationId: reservationId,
+            paymentType: paymentType,
+            body: req.body
+        });
+
         // Validate paymentType
         if (!paymentType || !['full', 'deposit'].includes(paymentType)) {
+            console.log(`[PAYMENT_OPTION] Invalid payment type: ${paymentType}`);
             return res.status(400).json({ message: 'Payment type must be either "full" or "deposit".' });
         }
 
-        const reservation = await Reservation.findById(reservationId);
+        const reservation = await Reservation.findById(reservationId).populate('payment');
         if (!reservation) {
             return res.status(404).json({ message: 'Reservation not found.' });
         }
+
+        // Kiểm tra payment có tồn tại không
+        if (!reservation.payment) {
+            return res.status(404).json({ message: 'Payment information not found for this reservation.' });
+        }
+
+        const payment = reservation.payment;
 
         // Chỉ cho phép thanh toán khi reservation đã được approve
         if (reservation.status !== 'approved') {
@@ -606,24 +700,22 @@ exports.selectPaymentOption = async (req, res) => {
         }
 
         // Tính toán số tiền cần thanh toán
-        const DEPOSIT_PERCENTAGE = 0.5;
-        const requiredDeposit = Math.ceil(reservation.totalPrice * DEPOSIT_PERCENTAGE);
         let amountToPay = 0;
 
         if (paymentType === 'full') {
-            amountToPay = reservation.totalPrice;
+            // Nếu đã đặt cọc, chỉ tính phần còn lại
+            if (payment.paymentStatus === 'deposit_paid') {
+                amountToPay = payment.totalPrice - payment.depositAmount;
+            } else {
+                amountToPay = payment.totalPrice;
+            }
         } else if (paymentType === 'deposit') {
-            amountToPay = requiredDeposit;
+            amountToPay = payment.depositAmount;
         }
 
         // Kiểm tra xem đã thanh toán chưa
-        if (reservation.paymentStatus === 'fully_paid') {
+        if (payment.paymentStatus === 'fully_paid') {
             return res.status(400).json({ message: 'Reservation is already fully paid.' });
-        }
-
-        if (paymentType === 'full' && reservation.paymentStatus === 'deposit_paid') {
-            // Thanh toán phần còn lại
-            amountToPay = reservation.totalPrice - requiredDeposit;
         }
 
         if (amountToPay <= 0) {
@@ -645,8 +737,10 @@ exports.selectPaymentOption = async (req, res) => {
                 paymentType: paymentType,
                 requiredAmount: amountToPay,
                 vietQRLink: vietQRLink,
-                reservationTotal: reservation.totalPrice,
-                depositAmount: requiredDeposit
+                reservationTotal: payment.totalPrice,
+                depositAmount: payment.depositAmount,
+                paidAmount: payment.paidAmount,
+                remainingAmount: payment.totalPrice - payment.paidAmount
             }
         });
 
