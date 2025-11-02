@@ -14,7 +14,8 @@ const {
   createCheckoutPayment,
   confirmCheckout,
   addServiceToRoomInStay,
-  listHotelServices
+  listHotelServices,
+  verifyCheckoutPayment
 } = require('../controllers/dashboardController');
 
 // Middleware imports
@@ -34,12 +35,13 @@ router.get('/checkin/:id', protect, isHotelManager, getReservationForCheckIn);
 router.post('/checkin/:id/confirm', protect, isHotelManager, confirmCheckIn);
 
 // Checkout workflow
-router.get('/checkout/find-room', protect, isHotelManager, findStayByRoomNumberForCheckout);
-router.post('/checkout/:stayId/create-payment', protect, isHotelManager, createCheckoutPayment);
-router.post('/checkout/:stayId/confirm', protect, isHotelManager, confirmCheckout);
+router.get('/checkout/find-room', protect, isStaff, findStayByRoomNumberForCheckout);
+router.post('/checkout/:stayId/create-payment', protect, isStaff, createCheckoutPayment);
+router.post('/checkout/:stayId/verify-payment', protect, isStaff, verifyCheckoutPayment);
+router.post('/checkout/:stayId/confirm', protect, isStaff, confirmCheckout);
 
 // Stay service management
-router.post('/stays/:stayId/rooms/:roomId/services', protect, isHotelManager, addServiceToRoomInStay);
-router.get('/hotels/:hotelId/services', protect, isHotelManager, listHotelServices);
+router.post('/stays/:stayId/rooms/:roomId/services', protect, isStaff, addServiceToRoomInStay);
+router.get('/hotels/:hotelId/services', protect, isStaff, listHotelServices);
 
 module.exports = router;

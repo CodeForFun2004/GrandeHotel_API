@@ -8,7 +8,6 @@ const roomTypeSchema = new mongoose.Schema({
     numberOfBeds: { type: Number, required: true },
     amenities: [{ type: String }],
     isActive: { type: Boolean, default: true },
-    maxCapacity: { type: Number, required: true }
 }, { timestamps: true });
 
 // Index for globally unique names

@@ -5,8 +5,11 @@ const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const RoomType = require('../models/roomTypeModel');
 const Stay = require('../models/stayModel');
-const Payment = require('../models/payment.model');
+// Use the reservation-scoped Payment summary model for all payment state
+const ReservationPayment = require('../models/paymentModel');
 const Service = require('../models/serviceModel');
+// VietQR generator reused for checkout payments
+const { generateVietQR } = require('../services/payment.service');
 
 // @desc    Lấy thống kê tổng quan dashboard
 // @route   GET /api/dashboard/stats
@@ -335,7 +338,8 @@ module.exports = {
   createCheckoutPayment,
   confirmCheckout,
   addServiceToRoomInStay,
-  listHotelServices
+  listHotelServices,
+  verifyCheckoutPayment
 };
 
 // ========================= CHECK-IN (Reception) =========================
@@ -350,13 +354,11 @@ async function searchReservationsForCheckIn(req, res) {
       return res.status(400).json({ message: 'Query is required' });
     }
 
-    // Only reservations that are approved and at least deposit paid
-    const reservations = await Reservation.find({
-      status: 'approved',
-      paymentStatus: { $in: ['deposit_paid', 'fully_paid'] }
-    })
+    // Find approved reservations and populate their payment summaries, then filter by paymentStatus
+    const reservations = await Reservation.find({ status: 'approved' })
       .populate('customer', 'fullname phone email')
       .populate('hotel', 'name')
+      .populate('payment')
       .sort({ createdAt: -1 });
 
     const q = query.trim().toLowerCase();
@@ -376,7 +378,7 @@ async function searchReservationsForCheckIn(req, res) {
         hotel: r.hotel,
         checkInDate: r.checkInDate,
         checkOutDate: r.checkOutDate,
-        paymentStatus: r.paymentStatus,
+        paymentStatus: r.payment?.paymentStatus || 'unpaid',
         details: details.map(d => ({ roomType: d.roomType, quantity: d.quantity }))
       };
     }));
@@ -409,7 +411,7 @@ async function findStayByRoomNumberForCheckout(req, res) {
       status: 'Checked in',
       'details.roomStays.room': room._id
     })
-      .populate('reservation', 'checkInDate checkOutDate paymentStatus depositAmount totalPrice')
+      .populate('reservation', 'checkInDate checkOutDate')
       .populate('hotel', 'name')
       .populate({ path: 'details.roomStays.room', select: 'roomNumber name' })
       .populate({ path: 'details.roomStays.services.service', select: 'name basePrice' });
@@ -456,13 +458,14 @@ async function findStayByRoomNumberForCheckout(req, res) {
 
     // Amount due: nights minus deposit (50%) + services
     let nightsDue = 0;
-    if (stay.reservation.paymentStatus === 'fully_paid') {
-      nightsDue = 0;
-    } else if (stay.reservation.paymentStatus === 'deposit_paid') {
-      nightsDue = Math.round(nightsPrice * 0.5);
-    } else {
-      nightsDue = nightsPrice; // fallback
+    let reservationPayment = null;
+    if (stay.reservation) {
+      reservationPayment = await ReservationPayment.findOne({ reservation: stay.reservation._id }).select('paymentStatus depositAmount totalPrice paidAmount');
     }
+    const payStatus = reservationPayment?.paymentStatus;
+    if (payStatus === 'fully_paid') nightsDue = 0;
+    else if (payStatus === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
+    else nightsDue = nightsPrice;
     const amountDue = nightsDue + servicesCost;
 
     return res.json({
@@ -488,7 +491,7 @@ async function createCheckoutPayment(req, res) {
     const { paymentMethod = 'cash' } = req.body || {};
 
     const stay = await Stay.findById(stayId)
-      .populate('reservation', 'checkInDate checkOutDate paymentStatus depositAmount totalPrice')
+      .populate('reservation', 'checkInDate checkOutDate')
       .populate('hotel', 'name');
     if (!stay) return res.status(404).json({ message: 'Stay not found' });
     if (stay.status !== 'Checked in') return res.status(400).json({ message: 'Stay is not in a check-in state' });
@@ -525,27 +528,45 @@ async function createCheckoutPayment(req, res) {
       nightsPrice += (priceMap2.get(String(rid)) || 0) * nights2;
     }
     let nightsDue = 0;
-    if (stay.reservation.paymentStatus === 'fully_paid') nightsDue = 0;
-    else if (stay.reservation.paymentStatus === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
+    let reservationPayment2 = null;
+    if (stay.reservation) {
+      reservationPayment2 = await ReservationPayment.findOne({ reservation: stay.reservation._id }).select('paymentStatus depositAmount totalPrice paidAmount');
+    }
+    const payStatus2 = reservationPayment2?.paymentStatus;
+    if (payStatus2 === 'fully_paid') nightsDue = 0;
+    else if (payStatus2 === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
     else nightsDue = nightsPrice;
     const amountDue = nightsDue + servicesCost;
 
-  // Description format: "checkedout" - stayID - amount - hotel
+  // Return a checkout payload; we don't create a separate ledger model here.
   const description = `checkedout - ${stay._id} - ${amountDue} - ${stay.hotel?.name || 'HOTEL'}`;
+  // Only generate QR if payment is required
+  let vietQRLink = null;
+  if (amountDue > 0 && payStatus2 !== 'fully_paid') {
+    const transferContent = String(stay.reservation?._id || stay._id).slice(-6);
+    vietQRLink = await generateVietQR(
+      process.env.MY_BANK_CODE,
+      process.env.MY_ACCOUNT_NUMBER,
+      amountDue,
+      transferContent
+    );
+  }
 
-    const payment = await Payment.create({
-      amount: amountDue,
-      paymentMethod,
-      description,
-      status: 'Pending',
-      stay: stay._id,
-      reservation: stay.reservation?._id || null,
-      hotel: stay.hotel?._id || null,
-      customer: null,
-      metadata: { nights: nights2, nightsPrice, nightsDue, servicesCost }
+    return res.status(200).json({
+      message: 'Checkout payment info prepared',
+      checkout: {
+        stayId: stay._id,
+        amountDue,
+        nights: nights2,
+        nightsPrice,
+        nightsDue,
+        servicesCost,
+        description,
+        suggestedPaymentMethod: paymentMethod,
+        vietQRLink,
+        requiresPayment: amountDue > 0 && payStatus2 !== 'fully_paid'
+      }
     });
-
-    return res.status(201).json({ message: 'Payment created', payment });
   } catch (error) {
     console.error('Error creating checkout payment:', error);
     res.status(500).json({ message: 'Server error' });
@@ -572,12 +593,12 @@ async function confirmCheckout(req, res) {
     if (!stay) { return res.status(404).json({ message: 'Stay not found' }); }
     if (stay.status !== 'Checked in') { return res.status(400).json({ message: 'Stay is not in a check-in state' }); }
 
-    // Update payment if provided
-    if (paymentId) {
-      await Payment.findByIdAndUpdate(paymentId, { status }, { new: true });
-      if (status !== 'Success') {
-        return res.status(200).json({ message: 'Payment status updated' });
-      }
+    // We accept an amountPaid in the body and a paymentMethod.
+    // Update the reservation-scoped Payment record accordingly.
+    const { amountPaid = null, paymentMethod = 'cash' } = req.body || {};
+
+    if (amountPaid != null && isNaN(Number(amountPaid))) {
+      return res.status(400).json({ message: 'amountPaid must be numeric' });
     }
 
     // Set rooms to Cleaning
@@ -591,6 +612,19 @@ async function confirmCheckout(req, res) {
     }
     if (allRooms.length > 0) {
       await Room.updateMany({ _id: { $in: allRooms } }, { $set: { status: 'Cleaning' } });
+    }
+
+    // If payment succeeded (or assumed succeeded), update reservation payment summary
+    if (status === 'Success' && stay.reservation) {
+      const resPay = await ReservationPayment.findOne({ reservation: stay.reservation });
+      if (resPay) {
+        const amt = amountPaid != null ? Number(amountPaid) : (resPay.totalPrice - (resPay.paidAmount || 0));
+        resPay.paidAmount = Math.min(Number(resPay.paidAmount || 0) + amt, Number(resPay.totalPrice || 0));
+        if (resPay.paidAmount >= resPay.totalPrice) resPay.paymentStatus = 'fully_paid';
+        else if (resPay.paidAmount >= resPay.depositAmount) resPay.paymentStatus = 'deposit_paid';
+        else resPay.paymentStatus = 'partially_paid';
+        await resPay.save();
+      }
     }
 
     // Close stay
@@ -616,6 +650,112 @@ async function confirmCheckout(req, res) {
   }
 }
 
+// @desc    Verify checkout payment via AppScript (mirror of reservation payment check)
+// @route   POST /api/dashboard/checkout/:stayId/verify-payment
+// @access  Private (Staff/Manager/Admin)
+async function verifyCheckoutPayment(req, res) {
+  try {
+    const { stayId } = req.params;
+    const stay = await Stay.findById(stayId)
+      .populate('reservation', '_id checkInDate checkOutDate')
+      .populate('hotel', 'name');
+    if (!stay) return res.status(404).json({ message: 'Stay not found' });
+    if (stay.status !== 'Checked in') return res.status(400).json({ message: 'Stay is not in a check-in state' });
+
+    // Compute current amount due similar to createCheckoutPayment
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(stay.reservation.checkInDate);
+    const nights = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
+    const allRooms = [];
+    let servicesCost = 0;
+    for (const d of stay.details) {
+      if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
+        allRooms.push(...d.roomStays.map(rs => rs.room));
+        for (const rs of d.roomStays) {
+          if (!Array.isArray(rs.services)) continue;
+          for (const sv of rs.services) {
+            const unit = await ServicePrice(sv.service);
+            servicesCost += unit * (sv.quantity || 1);
+          }
+        }
+      } else if (Array.isArray(d.rooms)) {
+        allRooms.push(...d.rooms);
+      }
+    }
+    const uniq = [...new Set(allRooms.map(r => String(r)))];
+    const roomDocs = await Room.find({ _id: { $in: uniq } }).select('_id pricePerNight');
+    const priceMap = new Map(roomDocs.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
+    let nightsPrice = 0;
+    for (const rid of uniq) nightsPrice += (priceMap.get(String(rid)) || 0) * nights;
+
+    const resPay = await ReservationPayment.findOne({ reservation: stay.reservation._id });
+    if (!resPay) return res.status(404).json({ message: 'Payment summary not found for reservation' });
+
+    let nightsDue = 0;
+    if (resPay.paymentStatus === 'fully_paid') nightsDue = 0;
+    else if (resPay.paymentStatus === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
+    else nightsDue = nightsPrice;
+    const amountDue = nightsDue + servicesCost;
+    if (amountDue <= 0) {
+      return res.status(200).json({ message: 'No amount due. Nothing to verify.', payment: resPay, amountDue: 0 });
+    }
+
+    // Fetch transactions from AppScript
+    const scriptUrl = process.env.APPSCRIPT_URL;
+    if (!scriptUrl) return res.status(500).json({ message: 'APPSCRIPT_URL is not configured' });
+
+    const response = await fetch(scriptUrl, { method: 'GET', redirect: 'follow', headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      const txt = await response.text();
+      return res.status(502).json({ message: 'Failed to fetch AppScript', status: response.status, preview: txt.substring(0, 200) });
+    }
+    const contentType = response.headers.get('content-type') || '';
+    let transactions;
+    if (contentType.includes('application/json')) {
+      const result = await response.json();
+      transactions = result.data;
+    } else {
+      const text = await response.text();
+      try { transactions = JSON.parse(text).data; } catch { return res.status(502).json({ message: 'AppScript did not return JSON' }); }
+    }
+
+    const reservationId = String(stay.reservation._id).toUpperCase();
+    const code6 = reservationId.slice(-6);
+
+    // Try to find a transaction that mentions the reservation id/code
+    let matchedTx = transactions.find(tx => {
+      const desc = (tx['Mô tả'] || '').toUpperCase();
+      const amt = Number(tx['Giá trị'] || 0);
+      return amt > 0 && (desc.includes(reservationId) || desc.includes(code6));
+    });
+
+    if (!matchedTx) {
+      return res.status(404).json({
+        message: 'No matching transaction found for checkout',
+        reservationId,
+        code: code6,
+        hint: 'Ensure the transfer description contains the reservation ID or last 6 characters.'
+      });
+    }
+
+    const paid = Number(matchedTx['Giá trị'] || 0);
+    resPay.paidAmount = Math.min((resPay.paidAmount || 0) + paid, resPay.totalPrice || 0);
+    if (resPay.paidAmount >= resPay.totalPrice) resPay.paymentStatus = 'fully_paid';
+    else if (resPay.paidAmount >= resPay.depositAmount) resPay.paymentStatus = 'deposit_paid';
+    else resPay.paymentStatus = 'partially_paid';
+    await resPay.save();
+
+    return res.status(200).json({
+      message: 'Checkout payment verified via AppScript',
+      matchedTransaction: matchedTx,
+      payment: resPay
+    });
+  } catch (error) {
+    console.error('Error verifying checkout payment:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+}
+
 // @desc    Get reservation detail and suggested rooms for check-in
 // @route   GET /api/dashboard/checkin/:id
 // @access  Private (Staff/Manager/Admin)
@@ -627,7 +767,8 @@ async function getReservationForCheckIn(req, res) {
       .populate('hotel', 'name');
     if (!reservation) return res.status(404).json({ message: 'Reservation not found' });
 
-    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(reservation.paymentStatus)) {
+    // Check payment summary on reservation (reservation.payment virtual)
+    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(reservation.payment?.paymentStatus)) {
       return res.status(400).json({ message: 'Reservation is not ready for check-in' });
     }
 
@@ -688,7 +829,7 @@ async function confirmCheckIn(req, res) {
     if (!reservation) {
       return res.status(404).json({ message: 'Reservation not found' });
     }
-    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(reservation.paymentStatus)) {
+    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(reservation.payment?.paymentStatus)) {
       return res.status(400).json({ message: 'Reservation is not ready for check-in' });
     }
 

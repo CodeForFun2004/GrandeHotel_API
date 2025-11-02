@@ -467,10 +467,20 @@ exports.handlePayment = async (req, res) => {
       { new: true }
     );
 
-    // Populate payment vào reservation
-    const updatedReservation = await Reservation.findById(reservationId).populate('payment');
+        // Populate payment vào reservation
+        const updatedReservation = await Reservation.findById(reservationId).populate('payment');
 
-    // === [5] LOG THÀNH CÔNG ===
+        // === [4.1] PHÂN BỔ PHÒNG KHI ĐẶT CỌC/THANH TOÁN ĐỦ ===
+        let allocation = null;
+        if (newPaymentStatus === 'deposit_paid' || newPaymentStatus === 'fully_paid') {
+            try {
+                allocation = await allocateRoomsForReservation(updatedReservation);
+            } catch (allocErr) {
+                console.warn('[PAYMENT] Allocation failed:', allocErr.message);
+            }
+        }
+
+        // === [5] LOG THÀNH CÔNG ===
     console.log(`[PAYMENT] SUCCESS - Reservation ${reservationId} updated:`, {
       oldStatus: currentPaymentStatus,
       newStatus: newPaymentStatus,
@@ -480,18 +490,17 @@ exports.handlePayment = async (req, res) => {
       depositAmount: depositAmount,
       transactionDescription: matchedTx["Mô tả"]
     });
-
         return res.status(200).json({
-      message: `Payment confirmed via AppScript. Status updated to: ${newPaymentStatus}`,
+            message: `Payment confirmed via AppScript. Status updated to: ${newPaymentStatus}`,
             reservation: updatedReservation,
-      matchedTransaction: matchedTx,
-      paymentDetails: {
-        paidAmount: newPaidAmount,
-        totalPrice: totalPrice,
-        depositAmount: depositAmount,
-        paymentType: paymentType,
-        oldStatus: currentPaymentStatus,
-        newStatus: newPaymentStatus
+            matchedTransaction: matchedTx,
+            paymentDetails: {
+                paidAmount: newPaidAmount,
+                totalPrice: totalPrice,
+                depositAmount: depositAmount,
+                paymentType: paymentType,
+                oldStatus: currentPaymentStatus,
+                newStatus: newPaymentStatus
             },
             allocation
         });
@@ -562,7 +571,7 @@ exports.getAllReservations = async (req, res) => {
     try {
         const reservations = await Reservation.find()
             .populate('hotel', 'name address')
-            .populate('customer', 'name email phone')
+            .populate('customer', 'fullname username email phone')
             .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details', 
@@ -589,7 +598,7 @@ exports.getReservationById = async (req, res) => {
         const reservationId = req.params.id;
         const reservation = await Reservation.findById(reservationId)
             .populate('hotel', 'name address description')
-            .populate('customer', 'name email phone address')
+            .populate('customer', 'fullname username email phone address')
             .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details',
@@ -767,7 +776,7 @@ exports.updateReservationStatus = async (req, res) => {
         }
         
         // Logic hủy đơn cần xử lý hoàn tiền nếu status: 'canceled'
-        if (status === 'canceled' && reservation.paymentStatus !== 'unpaid') {
+        if (status === 'canceled' && reservation.payment?.paymentStatus !== 'unpaid') {
             // NOTE: Cần thêm logic hoàn tiền (tạo bản ghi Refunding_Reservation)
             // Cập nhật paymentStatus nếu cần
             // Ví dụ: await Reservation.findByIdAndUpdate(reservationId, { paymentStatus: 'refunded' });
