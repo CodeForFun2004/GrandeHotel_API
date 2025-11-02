@@ -2,6 +2,7 @@ const Conversation = require('../models/conversation');
 const Message = require('../models/message');
 const Reservation = require('../models/reservationModel');
 const User = require('../models/user.model');
+const Hotel = require('../models/hotelModel');
 
 // Helper: Kiểm tra reservation active
 const isReservationActive = (reservation) => {
@@ -312,6 +313,87 @@ const sendMessageFromCustomer = async (req, res) => {
   }
 };
 
+// GET /api/customer/conversations - Customer lấy danh sách conversations
+const getCustomerConversations = async (req, res) => {
+  try {
+    const customerId = req.user._id;
+    const { query, tab } = req.query;
+
+    // Lấy active reservations của customer
+    const now = new Date();
+    const activeReservations = await Reservation.find({
+      customer: customerId,
+      status: { $in: ['approved', 'completed'] },
+      checkInDate: { $lte: now },
+      checkOutDate: { $gte: now }
+    }).select('_id');
+    const activeReservationIds = activeReservations.map(r => r._id);
+
+    // Query conversations - include those with active reservations OR no reservation
+    let filter = {
+      customer: customerId,
+      $or: [
+        { reservation: { $in: activeReservationIds } },
+        { reservation: null }
+      ]
+    };
+
+    // Filter theo tab
+    if (tab === 'unread') {
+      filter.unread = { $gt: 0 };
+    } else if (tab === 'active') {
+      // 'active' nghĩa là reservation confirmed (approved/completed)
+      // Đã filter ở trên
+    }
+
+    let conversations = await Conversation.find(filter)
+      .populate('hotel', 'name address')
+      .populate('reservation', 'status checkInDate checkOutDate')
+      .sort({ lastMessageAt: -1 });
+
+    // Filter theo query (tên hotel)
+    if (query) {
+      const kw = query.toLowerCase();
+      conversations = conversations.filter(c =>
+        c.hotel.name.toLowerCase().includes(kw) ||
+        c.hotel.address.toLowerCase().includes(kw)
+      );
+    }
+
+    // Thêm lastMessage cho mỗi conversation
+    const result = await Promise.all(conversations.map(async (conv) => {
+      const lastMsg = await Message.findOne({ conversation: conv._id }).sort({ time: -1 });
+      return {
+        threadId: conv.threadId,
+        hotel: {
+          Hotel_ID: conv.hotel._id,
+          Name: conv.hotel.name,
+          Address: conv.hotel.address
+        },
+        lastMessageAt: conv.lastMessageAt.toISOString(),
+        unread: conv.unread,
+        pinned: conv.pinned,
+        booking: conv.reservation ? {
+          Reservation_ID: conv.reservation._id.toString(),
+          Status: conv.reservation.status === 'approved' || conv.reservation.status === 'completed' ? 'confirmed' : 'pending',
+          CheckIn: conv.reservation.checkInDate.toISOString().split('T')[0],
+          CheckOut: conv.reservation.checkOutDate.toISOString().split('T')[0]
+        } : null,
+        messages: lastMsg ? [{
+          id: lastMsg._id.toString(),
+          from: lastMsg.from,
+          text: lastMsg.text,
+          time: lastMsg.time.toISOString()
+        }] : []
+      };
+    }));
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // GET /api/customer/conversations/:threadId - Customer xem conversation
 const getCustomerConversation = async (req, res) => {
   try {
@@ -362,5 +444,6 @@ module.exports = {
   markAsRead,
   togglePin,
   sendMessageFromCustomer,
+  getCustomerConversations,
   getCustomerConversation
 };
