@@ -30,6 +30,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const roomTypesRoutes = require('./routes/roomTypesRoutes');
 const favoriteRoutes = require('./routes/favoriteRoutes');
 const chatbotRoutes = require('./routes/chatbot.routes');
+const chatRoutes = require('./routes/chat.routes');
 
 
 
@@ -69,6 +70,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/room-types', roomTypesRoutes);
 app.use('/api/favorites', favoriteRoutes);
 app.use('/api/chatbot', chatbotRoutes);
+app.use('/api', chatRoutes);
 
 
 const PORT = process.env.PORT || 1000;
