@@ -8,6 +8,7 @@ const ReservationDetail = require('../models/reservationDetailModel');
 const Payment = require('../models/paymentModel');
 const RoomType = require('../models/roomTypeModel');
 const Service = require('../models/serviceModel');
+const Conversation = require('../models/conversation');
 // const Voucher = require('../models/voucherModel'); // Nếu có
 
 // Assuming you have dotenv or similar setup for environment variables
@@ -196,8 +197,28 @@ exports.approveReservation = async (req, res) => {
             { new: true }
         );
 
-        const message = action === 'approve' 
-            ? 'Reservation approved. Check-in Token generated.' 
+        // Tạo Conversation nếu approved và trong khoảng active
+        if (action === 'approve') {
+          const now = new Date();
+          if (now >= updatedReservation.checkInDate && now <= updatedReservation.checkOutDate) {
+            const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
+            if (!existingConv) {
+              const conv = new Conversation({
+                threadId: `T-${updatedReservation._id}`,
+                hotel: updatedReservation.hotel,
+                customer: updatedReservation.customer,
+                reservation: updatedReservation._id,
+                lastMessageAt: new Date(),
+                unread: 0,
+                pinned: false
+              });
+              await conv.save();
+            }
+          }
+        }
+
+        const message = action === 'approve'
+            ? 'Reservation approved. Check-in Token generated.'
             : 'Reservation canceled.';
 
         return res.status(200).json({
@@ -725,6 +746,26 @@ exports.updateReservationStatus = async (req, res) => {
             { status },
             { new: true }
         );
+
+        // Tạo Conversation nếu completed và trong khoảng active
+        if (status === 'completed') {
+          const now = new Date();
+          if (now >= updatedReservation.checkInDate && now <= updatedReservation.checkOutDate) {
+            const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
+            if (!existingConv) {
+              const conv = new Conversation({
+                threadId: `T-${updatedReservation._id}`,
+                hotel: updatedReservation.hotel,
+                customer: updatedReservation.customer,
+                reservation: updatedReservation._id,
+                lastMessageAt: new Date(),
+                unread: 0,
+                pinned: false
+              });
+              await conv.save();
+            }
+          }
+        }
 
         return res.status(200).json({
             message: `Reservation status updated to ${status}.`,
