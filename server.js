@@ -56,7 +56,8 @@ app.use('/api/hotels', hotelRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/room-types', roomTypeRoutes);
 app.use('/api/admin/managers', managerUserRoutes);
-app.use('/api/chatbot', chatbotRoutes);
+// app.use('/api/chatbot', chatbotRoutes);
+app.get('/api/roomtypes', roomController.getAllRoomTypes);
 
 const PORT = process.env.PORT || 1000;
 
