@@ -420,7 +420,8 @@ async function listActiveStaysForCheckout(req, res) {
       .populate('reservation', 'checkInDate checkOutDate customer')
       .populate({ path: 'reservation.customer', select: 'fullname phone email' })
       .populate({ path: 'details.roomType', select: 'name basePrice' })
-      .populate({ path: 'details.roomStays.room', select: 'roomNumber name pricePerNight' })
+      .populate({ path: 'details.roomStays.room', select: 'roomNumber name pricePerNight status' })
+      .populate({ path: 'details.rooms', select: 'roomNumber name pricePerNight status' })
       .populate('hotel', 'name');
 
     // Fetch payment summaries for all reservations
@@ -432,33 +433,61 @@ async function listActiveStaysForCheckout(req, res) {
     const items = [];
     for (const stay of stays) {
       for (const d of (stay.details || [])) {
-        for (const rs of (d.roomStays || [])) {
-          const room = rs.room;
-          const rt = d.roomType;
-          const reservation = stay.reservation;
-          const payment = reservation ? payMap.get(String(reservation._id)) : null;
-          const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(reservation.checkInDate);
-          const nightsSoFar = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
-          const guestName = (reservation?.customer?.fullname) || (rs.idVerification?.nameOnId) || '—';
-          const phone = reservation?.customer?.phone || '—';
-          const email = reservation?.customer?.email || '—';
+        const rt = d.roomType;
+        const reservation = stay.reservation;
+        const payment = reservation ? payMap.get(String(reservation._id)) : null;
+        const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(reservation.checkInDate);
+        const nightsSoFar = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
+        const baseGuestName = reservation?.customer?.fullname || '—';
+        const phone = reservation?.customer?.phone || '—';
+        const email = reservation?.customer?.email || '—';
+        const deposit = payment ? Number(payment.depositAmount || 0) : 0;
 
-          const deposit = payment ? Number(payment.depositAmount || 0) : 0;
-          const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
+        // Preferred path: roomStays
+        if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
+          for (const rs of d.roomStays) {
+            // skip rooms already checked out (partial checkout support)
+            if (rs.status === 'Checked out' || rs.checkedOutAt || rs.actualCheckedOut) continue;
+            const room = rs.room;
+            const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
+            const guestName = baseGuestName || (rs.idVerification?.nameOnId) || '—';
 
-          items.push({
-            stayId: String(stay._id),
-            guestName,
-            phone,
-            email,
-            roomType: rt?.name || '—',
-            roomNumber: room?.roomNumber || room?.name || '—',
-            checkIn: new Date(reservation.checkInDate),
-            checkOutPlan: new Date(reservation.checkOutDate),
-            pricePerNight,
-            nightsSoFar,
-            deposit,
-          });
+            items.push({
+              stayId: String(stay._id),
+              roomId: String(room?._id || ''),
+              guestName,
+              phone,
+              email,
+              roomType: rt?.name || '—',
+              roomNumber: room?.roomNumber || room?.name || '—',
+              checkIn: new Date(reservation.checkInDate),
+              checkOutPlan: new Date(reservation.checkOutDate),
+              pricePerNight,
+              nightsSoFar,
+              deposit,
+            });
+          }
+        } else if (Array.isArray(d.rooms) && d.rooms.length > 0) {
+          // Fallback legacy path: use rooms list when roomStays not present
+          for (const room of d.rooms) {
+            // Only list rooms that are still occupied
+            if (room?.status && room.status !== 'Occupied') continue;
+            const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
+            items.push({
+              stayId: String(stay._id),
+              roomId: String(room?._id || ''),
+              guestName: baseGuestName,
+              phone,
+              email,
+              roomType: rt?.name || '—',
+              roomNumber: room?.roomNumber || room?.name || '—',
+              checkIn: new Date(reservation.checkInDate),
+              checkOutPlan: new Date(reservation.checkOutDate),
+              pricePerNight,
+              nightsSoFar,
+              deposit,
+            });
+          }
         }
       }
     }
@@ -516,29 +545,16 @@ async function findStayByRoomNumberForCheckout(req, res) {
     const rawDays = (now - checkInAt) / msPerDay;
     const nights = Math.max(1, Math.ceil(rawDays));
 
-    // Nights price = sum(room.pricePerNight * nights) for each stayed room
-    const allRoomsInStay = [];
-    for (const d of stay.details) {
-      if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
-        allRoomsInStay.push(...d.roomStays.map(rs => rs.room));
-      } else if (Array.isArray(d.rooms)) {
-        allRoomsInStay.push(...d.rooms);
-      }
-    }
-    const uniqueRoomIds = [...new Set(allRoomsInStay.map(r => String(r)))];
-    const roomDocs = await Room.find({ _id: { $in: uniqueRoomIds } }).select('_id pricePerNight');
-    const roomPriceMap = new Map(roomDocs.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
+    // Nights price for this specific room only
+    const roomDoc = await Room.findById(room._id).select('_id pricePerNight');
+    const nightsPrice = (roomDoc?.pricePerNight || 0) * nights;
 
-    let nightsPrice = 0;
-    for (const rid of uniqueRoomIds) {
-      nightsPrice += (roomPriceMap.get(String(rid)) || 0) * nights;
-    }
-
-    // Services cost across all rooms
+    // Services cost for this room only
     let servicesCost = 0;
     for (const d of stay.details) {
       if (!Array.isArray(d.roomStays)) continue;
       for (const rs of d.roomStays) {
+        if (String(rs.room) !== String(room._id)) continue;
         if (!Array.isArray(rs.services)) continue;
         for (const sv of rs.services) {
           const unit = sv.service?.basePrice || 0;
@@ -579,7 +595,7 @@ async function findStayByRoomNumberForCheckout(req, res) {
 async function createCheckoutPayment(req, res) {
   try {
     const { stayId } = req.params;
-    const { paymentMethod = 'cash' } = req.body || {};
+    const { paymentMethod = 'cash', roomId = null } = req.body || {};
 
     const stay = await Stay.findById(stayId)
       .populate('reservation', 'checkInDate checkOutDate')
@@ -594,16 +610,14 @@ async function createCheckoutPayment(req, res) {
     const nights2 = Math.max(1, Math.ceil((now2 - checkInAt2) / msPerDay2));
     let nightsPrice = 0;
     let servicesCost = 0;
-    // Gather all rooms in the stay
-    const allRooms2 = [];
-    for (const d of stay.details) {
-      if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
-        allRooms2.push(...d.roomStays.map(rs => rs.room));
-      } else if (Array.isArray(d.rooms)) {
-        allRooms2.push(...d.rooms);
-      }
-      if (Array.isArray(d.roomStays)) {
+    if (roomId) {
+      // Calculate only for given room (partial checkout)
+      const roomDoc = await Room.findById(roomId).select('_id pricePerNight');
+      nightsPrice = (roomDoc?.pricePerNight || 0) * nights2;
+      for (const d of stay.details) {
+        if (!Array.isArray(d.roomStays)) continue;
         for (const rs of d.roomStays) {
+          if (String(rs.room) !== String(roomId)) continue;
           if (!Array.isArray(rs.services)) continue;
           for (const sv of rs.services) {
             const unit = await ServicePrice(sv.service);
@@ -611,12 +625,31 @@ async function createCheckoutPayment(req, res) {
           }
         }
       }
-    }
-    const uniq2 = [...new Set(allRooms2.map(r => String(r)))];
-    const roomDocs2 = await Room.find({ _id: { $in: uniq2 } }).select('_id pricePerNight');
-    const priceMap2 = new Map(roomDocs2.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
-    for (const rid of uniq2) {
-      nightsPrice += (priceMap2.get(String(rid)) || 0) * nights2;
+    } else {
+      // Original behavior: whole stay
+      const allRooms2 = [];
+      for (const d of stay.details) {
+        if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
+          allRooms2.push(...d.roomStays.map(rs => rs.room));
+        } else if (Array.isArray(d.rooms)) {
+          allRooms2.push(...d.rooms);
+        }
+        if (Array.isArray(d.roomStays)) {
+          for (const rs of d.roomStays) {
+            if (!Array.isArray(rs.services)) continue;
+            for (const sv of rs.services) {
+              const unit = await ServicePrice(sv.service);
+              servicesCost += unit * (sv.quantity || 1);
+            }
+          }
+        }
+      }
+      const uniq2 = [...new Set(allRooms2.map(r => String(r)))];
+      const roomDocs2 = await Room.find({ _id: { $in: uniq2 } }).select('_id pricePerNight');
+      const priceMap2 = new Map(roomDocs2.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
+      for (const rid of uniq2) {
+        nightsPrice += (priceMap2.get(String(rid)) || 0) * nights2;
+      }
     }
     let nightsDue = 0;
     let reservationPayment2 = null;
@@ -678,7 +711,7 @@ async function ServicePrice(serviceId) {
 async function confirmCheckout(req, res) {
   try {
     const { stayId } = req.params;
-    const { paymentId, status = 'Success' } = req.body || {};
+    const { paymentId, status = 'Success', roomId = null } = req.body || {};
 
     const stay = await Stay.findById(stayId);
     if (!stay) { return res.status(404).json({ message: 'Stay not found' }); }
@@ -692,24 +725,54 @@ async function confirmCheckout(req, res) {
       return res.status(400).json({ message: 'amountPaid must be numeric' });
     }
 
-    // Set rooms to Cleaning
-    const allRooms = [];
-    for (const d of stay.details) {
-      if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
-        allRooms.push(...d.roomStays.map(rs => rs.room));
-      } else if (Array.isArray(d.rooms)) {
-        allRooms.push(...d.rooms);
+    // Set room(s) to Cleaning and mark per-room checkout when roomId is provided
+    if (roomId) {
+      // Update only the specified room
+      await Room.updateOne({ _id: roomId }, { $set: { status: 'Cleaning' } });
+      // Mark this roomStay as checked out. If not present (legacy), create it.
+      let touched = false;
+      for (const d of stay.details) {
+        if (!Array.isArray(d.roomStays)) d.roomStays = [];
+        const rs = d.roomStays.find(x => String(x.room) === String(roomId));
+        if (rs) {
+          if (rs.status !== 'Checked out') {
+            rs.status = 'Checked out';
+            rs.checkedOutAt = new Date();
+            touched = true;
+          }
+        } else if (Array.isArray(d.rooms) && d.rooms.some(r => String(r) === String(roomId))) {
+          d.roomStays.push({ room: roomId, guests: [], services: [], status: 'Checked out', checkedOutAt: new Date() });
+          touched = true;
+        }
       }
-    }
-    if (allRooms.length > 0) {
-      await Room.updateMany({ _id: { $in: allRooms } }, { $set: { status: 'Cleaning' } });
+      if (touched) stay.markModified('details');
+    } else {
+      // Fallback: mark all rooms
+      const allRooms = [];
+      for (const d of stay.details) {
+        if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
+          allRooms.push(...d.roomStays.map(rs => rs.room));
+          // mark roomStays
+          for (const rs of d.roomStays) {
+            rs.status = 'Checked out';
+            rs.checkedOutAt = new Date();
+          }
+        } else if (Array.isArray(d.rooms)) {
+          allRooms.push(...d.rooms);
+        }
+      }
+      if (allRooms.length > 0) {
+        await Room.updateMany({ _id: { $in: allRooms } }, { $set: { status: 'Cleaning' } });
+      }
+      stay.markModified('details');
     }
 
     // If payment succeeded (or assumed succeeded), update reservation payment summary
-    if (status === 'Success' && stay.reservation) {
+    // Only update payment summary when amountPaid is provided
+    if (status === 'Success' && stay.reservation && amountPaid != null) {
       const resPay = await ReservationPayment.findOne({ reservation: stay.reservation });
       if (resPay) {
-        const amt = amountPaid != null ? Number(amountPaid) : (resPay.totalPrice - (resPay.paidAmount || 0));
+        const amt = Number(amountPaid);
         resPay.paidAmount = Math.min(Number(resPay.paidAmount || 0) + amt, Number(resPay.totalPrice || 0));
         if (resPay.paidAmount >= resPay.totalPrice) resPay.paymentStatus = 'fully_paid';
         else if (resPay.paidAmount >= resPay.depositAmount) resPay.paymentStatus = 'deposit_paid';
@@ -718,23 +781,28 @@ async function confirmCheckout(req, res) {
       }
     }
 
-    // Close stay
-    stay.actualCheckOut = new Date();
-    stay.status = 'Checked out';
-    await stay.save();
-    // Update reservation stay status to checked_out
-    if (stay.reservation) {
-      await Reservation.findByIdAndUpdate(
-        stay.reservation,
-        {
-          stayStatus: 'checked_out',
-          checkedOutAt: new Date(),
-          checkedOutBy: req.user?._id || null
-        },
-        { new: true }
-      );
+    // If all roomStays checked out then close stay, else keep active
+    const allRoomStays = stay.details.flatMap(d => Array.isArray(d.roomStays) ? d.roomStays : []);
+    const allChecked = allRoomStays.length > 0 && allRoomStays.every(rs => rs.status === 'Checked out');
+    if (allChecked) {
+      stay.actualCheckOut = new Date();
+      stay.status = 'Checked out';
+      await stay.save();
+      if (stay.reservation) {
+        await Reservation.findByIdAndUpdate(
+          stay.reservation,
+          {
+            stayStatus: 'checked_out',
+            checkedOutAt: new Date(),
+            checkedOutBy: req.user?._id || null
+          },
+          { new: true }
+        );
+      }
+    } else {
+      await stay.save();
     }
-    return res.status(200).json({ message: 'Checkout completed', stayId: stay._id });
+    return res.status(200).json({ message: 'Checkout completed', stayId: stay._id, fullyCheckedOut: allChecked });
   } catch (error) {
     console.error('Error confirming checkout:', error);
     res.status(500).json({ message: 'Server error' });
@@ -747,6 +815,7 @@ async function confirmCheckout(req, res) {
 async function verifyCheckoutPayment(req, res) {
   try {
     const { stayId } = req.params;
+    const { roomId = null } = req.body || {};
     const stay = await Stay.findById(stayId)
       .populate('reservation', '_id checkInDate checkOutDate')
       .populate('hotel', 'name');
@@ -757,27 +826,43 @@ async function verifyCheckoutPayment(req, res) {
     const msPerDay = 1000 * 60 * 60 * 24;
     const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(stay.reservation.checkInDate);
     const nights = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
-    const allRooms = [];
     let servicesCost = 0;
-    for (const d of stay.details) {
-      if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
-        allRooms.push(...d.roomStays.map(rs => rs.room));
+    let nightsPrice = 0;
+    if (roomId) {
+      const roomDoc = await Room.findById(roomId).select('_id pricePerNight');
+      nightsPrice = (roomDoc?.pricePerNight || 0) * nights;
+      for (const d of stay.details) {
+        if (!Array.isArray(d.roomStays)) continue;
         for (const rs of d.roomStays) {
+          if (String(rs.room) !== String(roomId)) continue;
           if (!Array.isArray(rs.services)) continue;
           for (const sv of rs.services) {
             const unit = await ServicePrice(sv.service);
             servicesCost += unit * (sv.quantity || 1);
           }
         }
-      } else if (Array.isArray(d.rooms)) {
-        allRooms.push(...d.rooms);
       }
+    } else {
+      const allRooms = [];
+      for (const d of stay.details) {
+        if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
+          allRooms.push(...d.roomStays.map(rs => rs.room));
+          for (const rs of d.roomStays) {
+            if (!Array.isArray(rs.services)) continue;
+            for (const sv of rs.services) {
+              const unit = await ServicePrice(sv.service);
+              servicesCost += unit * (sv.quantity || 1);
+            }
+          }
+        } else if (Array.isArray(d.rooms)) {
+          allRooms.push(...d.rooms);
+        }
+      }
+      const uniq = [...new Set(allRooms.map(r => String(r)))];
+      const roomDocs = await Room.find({ _id: { $in: uniq } }).select('_id pricePerNight');
+      const priceMap = new Map(roomDocs.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
+      for (const rid of uniq) nightsPrice += (priceMap.get(String(rid)) || 0) * nights;
     }
-    const uniq = [...new Set(allRooms.map(r => String(r)))];
-    const roomDocs = await Room.find({ _id: { $in: uniq } }).select('_id pricePerNight');
-    const priceMap = new Map(roomDocs.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
-    let nightsPrice = 0;
-    for (const rid of uniq) nightsPrice += (priceMap.get(String(rid)) || 0) * nights;
 
     const resPay = await ReservationPayment.findOne({ reservation: stay.reservation._id });
     if (!resPay) return res.status(404).json({ message: 'Payment summary not found for reservation' });
@@ -795,7 +880,7 @@ async function verifyCheckoutPayment(req, res) {
     const scriptUrl = process.env.APPSCRIPT_URL;
     if (!scriptUrl) return res.status(500).json({ message: 'APPSCRIPT_URL is not configured' });
 
-    const response = await fetch(scriptUrl, { method: 'GET', redirect: 'follow', headers: { Accept: 'application/json' } });
+  const response = await fetch(scriptUrl, { method: 'GET', redirect: 'follow', headers: { Accept: 'application/json' } });
     if (!response.ok) {
       const txt = await response.text();
       return res.status(502).json({ message: 'Failed to fetch AppScript', status: response.status, preview: txt.substring(0, 200) });
@@ -830,7 +915,7 @@ async function verifyCheckoutPayment(req, res) {
     }
 
     const paid = Number(matchedTx['Giá trị'] || 0);
-    resPay.paidAmount = Math.min((resPay.paidAmount || 0) + paid, resPay.totalPrice || 0);
+  resPay.paidAmount = Math.min((resPay.paidAmount || 0) + paid, resPay.totalPrice || 0);
     if (resPay.paidAmount >= resPay.totalPrice) resPay.paymentStatus = 'fully_paid';
     else if (resPay.paidAmount >= resPay.depositAmount) resPay.paymentStatus = 'deposit_paid';
     else resPay.paymentStatus = 'partially_paid';

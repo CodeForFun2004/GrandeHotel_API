@@ -39,7 +39,11 @@ const roomStaySchema = new mongoose.Schema({
   services: { type: [roomServiceSchema], default: [] },
   // One ID verification per room (lead guest)
   idVerification: { type: idVerificationSchema, default: null },
-  notes: { type: String, default: null }
+  notes: { type: String, default: null },
+  // Per-room checkout tracking
+  status: { type: String, enum: ['Checked in', 'Checked out'], default: 'Checked in' },
+  // When this specific room was checked out
+  checkedOutAt: { type: Date, default: null }
 }, { _id: false });
 
 const stayDetailSchema = new mongoose.Schema({
@@ -62,6 +66,7 @@ const staySchema = new mongoose.Schema({
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false, default: null, index: true },
   details: { type: [stayDetailSchema], default: [] },
   actualCheckIn: { type: Date, default: null },
+  // When the entire stay (all rooms) was checked out
   actualCheckOut: { type: Date, default: null },
   status: { type: String, enum: ['Checked in', 'Checked out', 'Canceled'], default: 'Checked in', index: true },
   notes: { type: String, default: null },
