@@ -37,6 +37,10 @@ const isAdmin = (req, res, next) => {
 
 const isStaff = (req, res, next) => {
   if (req.user && req.user.role === 'staff') {
+    // Ensure staff has hotelId
+    if (!req.user.hotelId) {
+      return res.status(403).json({ message: 'Staff không có hotel ID được gán' });
+    }
     return next();
   } else {
     return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho staff' });
@@ -53,6 +57,14 @@ const isHotelManager = (req, res, next) => {
   } else {
     return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho hotel-manager' });
   }
-};  
+};
 
-module.exports = { protect, isAdmin, isStaff, isHotelManager };
+const isCustomer = (req, res, next) => {
+  if (req.user && req.user.role === 'customer') {
+    return next();
+  } else {
+    return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho customer' });
+  }
+};
+
+module.exports = { protect, isAdmin, isStaff, isHotelManager, isCustomer };
