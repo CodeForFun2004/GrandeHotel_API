@@ -176,6 +176,54 @@ exports.updateUserAvatar = async (req, res) => {
   }
 };
 
+// @desc    Upload user photoFace
+// @route   PUT /api/users/:id/photoFace
+// @access  Private
+exports.uploadPhotoFace = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Kiểm tra file upload
+    if (!req.file || !req.file.path) {
+      return res.status(400).json({ message: 'No photoFace file uploaded' });
+    }
+
+    // Nếu user đã có photoFace, xóa trên Cloudinary
+    if (user.photoFace) {
+      const cloudinary = require('../config/cloudinary');
+      // Extract public_id từ link Cloudinary
+      const match = user.photoFace.match(/\/([^\/]+)\.(jpg|jpeg|png)$/);
+      if (match) {
+        const publicId = match[1];
+        try {
+          await cloudinary.uploader.destroy(`grand-hotel/photoFace/users/${publicId}`);
+        } catch (err) {
+          // Không chặn flow nếu xóa thất bại
+          console.warn('Không thể xóa photoFace cũ trên Cloudinary:', err.message);
+        }
+      }
+    }
+
+    // Cập nhật photoFace mới
+    user.photoFace = req.file.path;
+    await user.save();
+    res.json({
+      message: 'User photoFace uploaded successfully',
+      user: {
+        _id: user._id,
+        username: user.username,
+        fullname: user.fullname,
+        email: user.email,
+        role: user.role,
+        photoFace: user.photoFace
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to upload user photoFace', error: err.message });
+  }
+};
+
 
 // @desc    Delete user
 // @route   DELETE /api/users/:id
