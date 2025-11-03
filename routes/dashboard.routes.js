@@ -30,9 +30,9 @@ router.get('/users/stats', protect, isAdmin, getUserStats);
 router.get('/activities/recent', protect, isAdmin, getRecentActivities);
 
 // Check-in workflow
-router.get('/checkin/search', protect, isHotelManager, searchReservationsForCheckIn);
-router.get('/checkin/:id', protect, isHotelManager, getReservationForCheckIn);
-router.post('/checkin/:id/confirm', protect, isHotelManager, confirmCheckIn);
+router.get('/checkin/search', protect, isStaff, searchReservationsForCheckIn);
+router.get('/checkin/:id', protect, isStaff, getReservationForCheckIn);
+router.post('/checkin/:id/confirm', protect, isStaff, confirmCheckIn);
 
 // Checkout workflow
 router.get('/checkout/find-room', protect, isStaff, findStayByRoomNumberForCheckout);

@@ -31,7 +31,7 @@ exports.createReservation = async (req, res) => {
     try {
         const {
             hotelId,
-            customerId,
+            // customerId is ignored; we take customer from the authenticated token
             checkInDate,
             checkOutDate,
             numberOfGuests,
@@ -40,17 +40,19 @@ exports.createReservation = async (req, res) => {
             isFullPayment // true nếu khách chọn thanh toán 100%, false nếu thanh toán cọc
         } = req.body;
 
+        // Business rule: must be logged in to create a reservation
+        const authUser = req.user;
+        if (!authUser || !authUser._id) {
+            return res.status(401).json({ message: 'Authentication required to create reservation.' });
+        }
+
         // Basic validation
         if (!hotelId || !checkInDate || !checkOutDate || !rooms || rooms.length === 0) {
             return res.status(400).json({ message: 'Missing required reservation information.' });
         }
 
-        // Xử lý trường hợp guest (không có customerId)
-        let finalCustomerId = customerId;
-        if (customerId === "guest" || !customerId) {
-            // Tạo một ObjectId tạm thời cho guest hoặc sử dụng null
-            finalCustomerId = null; // Hoặc tạo ObjectId mới: new mongoose.Types.ObjectId()
-        }
+        // Always take customer from token
+        const finalCustomerId = authUser._id;
 
         // --- BƯỚC 1: TÍNH TOÁN TỔNG GIÁ ---
         let totalPrice = 0;
@@ -129,8 +131,9 @@ exports.createReservation = async (req, res) => {
              transferContent 
         );
 
-        // Populate payment vào reservation để trả về
-        await reservation.populate('payment');
+    // Populate payment và customer vào reservation để trả về
+    await reservation.populate('payment');
+    await reservation.populate('customer', 'fullname username email phone');
 
         return res.status(201).json({
             message: 'Reservation created successfully and is pending approval.',

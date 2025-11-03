@@ -349,27 +349,44 @@ module.exports = {
 // @access  Private (Staff/Manager/Admin)
 async function searchReservationsForCheckIn(req, res) {
   try {
-    const { query } = req.query;
-    if (!query || !query.trim()) {
-      return res.status(400).json({ message: 'Query is required' });
+    const { query, checkInDate, todayOnly } = req.query;
+
+  // Build base matcher: approved reservations that are not yet checked in/out
+  const baseMatch = { status: 'approved', stayStatus: { $nin: ['checked_in', 'checked_out'] } };
+
+    // Optional date filter: if todayOnly=true, or checkInDate provided
+    if (todayOnly === 'true' || (checkInDate && String(checkInDate).trim())) {
+      const day = todayOnly === 'true' ? new Date() : new Date(checkInDate);
+      const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
+      const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
+      baseMatch.checkInDate = { $gte: start, $lte: end };
     }
 
-    // Find approved reservations and populate their payment summaries, then filter by paymentStatus
-    const reservations = await Reservation.find({ status: 'approved' })
-      .populate('customer', 'fullname phone email')
+  // Load candidates
+    const reservations = await Reservation.find(baseMatch)
+      .populate('customer', 'fullname phone email username')
       .populate('hotel', 'name')
       .populate('payment')
-      .sort({ createdAt: -1 });
+      .sort({ checkInDate: 1, createdAt: -1 });
 
-    const q = query.trim().toLowerCase();
-    const filtered = reservations.filter(r => {
-      const name = (r.customer?.fullname || '').toLowerCase();
-      const phone = (r.customer?.phone || '').toLowerCase();
-      return name.includes(q) || phone.includes(q);
-    });
+    // Filter to eligible payment statuses only
+    const eligible = reservations.filter(r => ['deposit_paid', 'fully_paid'].includes(r.payment?.paymentStatus));
 
-    // Return light payload
-    const result = await Promise.all(filtered.slice(0, 20).map(async r => {
+    // Optional text query across fullname, phone, username, reservation id
+    let filtered = eligible;
+    if (query && String(query).trim()) {
+      const q = String(query).trim().toLowerCase();
+      filtered = eligible.filter(r => {
+        const name = (r.customer?.fullname || '').toLowerCase();
+        const phone = (r.customer?.phone || '').toLowerCase();
+        const uname = (r.customer?.username || '').toLowerCase();
+        const rid = String(r._id || '').toLowerCase();
+        return name.includes(q) || phone.includes(q) || uname.includes(q) || rid.includes(q);
+      });
+    }
+
+    // Return light payload (limit to 50 to avoid overload)
+    const result = await Promise.all(filtered.slice(0, 50).map(async r => {
       const details = await ReservationDetail.find({ reservation: r._id })
         .populate('roomType', 'name');
       return {
@@ -767,8 +784,11 @@ async function getReservationForCheckIn(req, res) {
       .populate('hotel', 'name');
     if (!reservation) return res.status(404).json({ message: 'Reservation not found' });
 
-    // Check payment summary on reservation (reservation.payment virtual)
-    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(reservation.payment?.paymentStatus)) {
+    // Load payment summary document for this reservation
+    const paymentDoc = await ReservationPayment.findOne({ reservation: reservation._id }).select('paymentStatus depositAmount totalPrice paidAmount');
+
+    // Check payment summary on reservation - must be approved and deposit/full paid
+    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(paymentDoc?.paymentStatus)) {
       return res.status(400).json({ message: 'Reservation is not ready for check-in' });
     }
 
@@ -776,20 +796,8 @@ async function getReservationForCheckIn(req, res) {
       .populate('roomType', 'name')
       .populate({ path: 'reservedRooms', select: '_id roomNumber name status' });
 
-    // For each roomType, suggest currently Available rooms (simple approach)
+    // For each roomType, suggest current Available rooms (always provide a pool for reassignment)
     const suggestions = await Promise.all(details.map(async d => {
-      // if reserved rooms already picked, suggest those
-      const reserved = Array.isArray(d.reservedRooms) ? d.reservedRooms : [];
-      if (reserved.length >= d.quantity) {
-        return {
-          roomType: d.roomType,
-          requiredQuantity: d.quantity,
-          suggestedRooms: reserved.slice(0, d.quantity),
-          source: 'reserved'
-        };
-      }
-
-      // otherwise suggest current available rooms
       const rooms = await Room.find({
         hotel: reservation.hotel,
         roomType: d.roomType._id,
@@ -799,13 +807,19 @@ async function getReservationForCheckIn(req, res) {
       return {
         roomType: d.roomType,
         requiredQuantity: d.quantity,
-        suggestedRooms: rooms.slice(0, d.quantity),
+        suggestedRooms: rooms, // full pool for reassignment UI
         source: 'available'
       };
     }));
 
     return res.json({
       reservation,
+      payment: paymentDoc ? {
+        paymentStatus: paymentDoc.paymentStatus,
+        depositAmount: Number(paymentDoc.depositAmount || 0),
+        totalPrice: Number(paymentDoc.totalPrice || 0),
+        paidAmount: Number(paymentDoc.paidAmount || 0)
+      } : null,
       details: details.map(d => ({ roomType: d.roomType, quantity: d.quantity, reservedRooms: d.reservedRooms })),
       suggestions
     });
@@ -818,7 +832,7 @@ async function getReservationForCheckIn(req, res) {
 // @desc    Confirm check-in: create Stay and set rooms to Occupied
 // @route   POST /api/dashboard/checkin/:id/confirm
 // @access  Private (Staff/Manager/Admin)
-// @body    { selections: [{ roomTypeId, roomIds: [..] }] }
+// @body    { selections: [{ roomTypeId, roomIds: [..] }], idVerifications?: [{ roomId: string, idDocument: { type?: 'citizen_id'|'passport'|'other', number: string, nameOnId: string, address?: string, images?: Array<{ publicId: string, url: string }>, method?: 'manual'|'face', faceScore?: number } }] }
 async function confirmCheckIn(req, res) {
   try {
     const { id } = req.params;
@@ -829,21 +843,44 @@ async function confirmCheckIn(req, res) {
     if (!reservation) {
       return res.status(404).json({ message: 'Reservation not found' });
     }
-    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(reservation.payment?.paymentStatus)) {
+    // Ensure reservation is approved and payment document shows deposit or full paid
+    const resPayment = await ReservationPayment.findOne({ reservation: reservation._id }).select('paymentStatus depositAmount totalPrice paidAmount');
+    if (reservation.status !== 'approved' || !['deposit_paid', 'fully_paid'].includes(resPayment?.paymentStatus)) {
       return res.status(400).json({ message: 'Reservation is not ready for check-in' });
     }
 
   const details = await ReservationDetail.find({ reservation: id });
 
-    // If no selections provided, auto-use reserved rooms
+    // If no selections provided, auto-pick: use reserved rooms first, fill remaining with currently available rooms
     if (!Array.isArray(selections) || selections.length === 0) {
       const autoSelections = [];
       for (const d of details) {
-        const reserved = Array.isArray(d.reservedRooms) ? d.reservedRooms.map(r => String(r)) : [];
-        if (reserved.length !== d.quantity) {
-          return res.status(400).json({ message: 'Reserved rooms not fully allocated for this reservation. Please allocate or provide selections.' });
+        const reservedIds = Array.isArray(d.reservedRooms) ? d.reservedRooms.map(r => String(r)) : [];
+        const need = Math.max(0, Number(d.quantity || 0) - reservedIds.length);
+
+        let picked = [];
+        if (need > 0) {
+          const candidates = await Room.find({
+            hotel: reservation.hotel,
+            roomType: d.roomType,
+            status: { $in: ['Available', 'available', 'Active'] },
+            _id: { $nin: reservedIds }
+          }).select('_id').limit(need);
+
+          if (candidates.length < need) {
+            return res.status(400).json({
+              message: 'Not enough available rooms to auto-complete check-in for a room type',
+              detailId: d._id,
+              roomTypeId: d.roomType,
+              required: d.quantity,
+              reservedCount: reservedIds.length,
+              stillNeeded: need,
+            });
+          }
+          picked = candidates.map(c => String(c._id));
         }
-        autoSelections.push({ roomTypeId: String(d.roomType), roomIds: reserved });
+
+        autoSelections.push({ roomTypeId: String(d.roomType), roomIds: [...reservedIds, ...picked] });
       }
       selections = autoSelections;
     }
@@ -891,12 +928,32 @@ async function confirmCheckIn(req, res) {
     const priceMap = new Map(roomTypeDocs.map(rt => [String(rt._id), Number(rt.basePrice || 0)]));
 
     // Build Stay.details with roomStays
+    const verArray = (req.body && Array.isArray(req.body.idVerifications)) ? req.body.idVerifications : [];
+    const verMap = new Map(verArray.map(v => [String(v.roomId), v.idDocument]));
+
     const stayDetails = selections.map(s => {
       const total = (priceMap.get(String(s.roomTypeId)) || 0) * nights * s.roomIds.length;
       return {
         roomType: s.roomTypeId,
         rooms: s.roomIds,
-        roomStays: s.roomIds.map(rid => ({ room: rid, guests: [], services: [] })),
+        roomStays: s.roomIds.map(rid => {
+          const doc = verMap.get(String(rid));
+          let idVerification = null;
+          if (doc && doc.number && doc.nameOnId) {
+            idVerification = {
+              type: doc.type || 'citizen_id',
+              number: String(doc.number),
+              nameOnId: String(doc.nameOnId),
+              address: doc.address || null,
+              images: Array.isArray(doc.images) ? doc.images.map(img => ({ publicId: img.publicId, url: img.url })) : [],
+              method: doc.method || 'manual',
+              faceScore: typeof doc.faceScore === 'number' ? doc.faceScore : null,
+              verifiedAt: new Date(),
+              verifiedBy: req.user?._id || null
+            };
+          }
+          return { room: rid, guests: [], services: [], idVerification };
+        }),
         totalPrice: total,
         notes: null
       };
