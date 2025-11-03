@@ -335,6 +335,7 @@ module.exports = {
   getReservationForCheckIn,
   confirmCheckIn,
   findStayByRoomNumberForCheckout,
+  listActiveStaysForCheckout,
   createCheckoutPayment,
   confirmCheckout,
   addServiceToRoomInStay,
@@ -408,6 +409,79 @@ async function searchReservationsForCheckIn(req, res) {
 }
 
 // ========================= CHECK-OUT (Reception) =========================
+
+// @desc    List all current stays (checked in) with per-room entries for checkout
+// @route   GET /api/dashboard/checkout/inhouse?query=...
+// @access  Private (Staff/Manager/Admin)
+async function listActiveStaysForCheckout(req, res) {
+  try {
+    const { query } = req.query || {};
+    const stays = await Stay.find({ status: 'Checked in' })
+      .populate('reservation', 'checkInDate checkOutDate customer')
+      .populate({ path: 'reservation.customer', select: 'fullname phone email' })
+      .populate({ path: 'details.roomType', select: 'name basePrice' })
+      .populate({ path: 'details.roomStays.room', select: 'roomNumber name pricePerNight' })
+      .populate('hotel', 'name');
+
+    // Fetch payment summaries for all reservations
+    const resIds = stays.map(s => s.reservation?._id).filter(Boolean);
+    const pays = await ReservationPayment.find({ reservation: { $in: resIds } }).select('reservation paymentStatus depositAmount totalPrice paidAmount');
+    const payMap = new Map(pays.map(p => [String(p.reservation), p]));
+
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const items = [];
+    for (const stay of stays) {
+      for (const d of (stay.details || [])) {
+        for (const rs of (d.roomStays || [])) {
+          const room = rs.room;
+          const rt = d.roomType;
+          const reservation = stay.reservation;
+          const payment = reservation ? payMap.get(String(reservation._id)) : null;
+          const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(reservation.checkInDate);
+          const nightsSoFar = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
+          const guestName = (reservation?.customer?.fullname) || (rs.idVerification?.nameOnId) || '—';
+          const phone = reservation?.customer?.phone || '—';
+          const email = reservation?.customer?.email || '—';
+
+          const deposit = payment ? Number(payment.depositAmount || 0) : 0;
+          const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
+
+          items.push({
+            stayId: String(stay._id),
+            guestName,
+            phone,
+            email,
+            roomType: rt?.name || '—',
+            roomNumber: room?.roomNumber || room?.name || '—',
+            checkIn: new Date(reservation.checkInDate),
+            checkOutPlan: new Date(reservation.checkOutDate),
+            pricePerNight,
+            nightsSoFar,
+            deposit,
+          });
+        }
+      }
+    }
+
+    let filtered = items;
+    if (query && String(query).trim()) {
+      const q = String(query).trim().toLowerCase();
+      filtered = items.filter(it =>
+        String(it.stayId).toLowerCase().includes(q) ||
+        String(it.roomNumber).toLowerCase().includes(q) ||
+        String(it.guestName).toLowerCase().includes(q) ||
+        String(it.phone || '').toLowerCase().includes(q)
+      );
+    }
+
+    // sort by roomNumber then guestName
+    filtered.sort((a,b)=> String(a.roomNumber).localeCompare(String(b.roomNumber)) || String(a.guestName).localeCompare(String(b.guestName)));
+    return res.json({ inHouse: filtered });
+  } catch (error) {
+    console.error('Error listing active stays for checkout:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
 
 // @desc    Find current stay by room number (occupied) and show bill breakdown
 // @route   GET /api/dashboard/checkout/find-room?roomNumber=...

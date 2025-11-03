@@ -11,6 +11,7 @@ const {
   getReservationForCheckIn,
   confirmCheckIn,
   findStayByRoomNumberForCheckout,
+  listActiveStaysForCheckout,
   createCheckoutPayment,
   confirmCheckout,
   addServiceToRoomInStay,
@@ -35,6 +36,7 @@ router.get('/checkin/:id', protect, isStaff, getReservationForCheckIn);
 router.post('/checkin/:id/confirm', protect, isStaff, confirmCheckIn);
 
 // Checkout workflow
+router.get('/checkout/inhouse', protect, isStaff, listActiveStaysForCheckout);
 router.get('/checkout/find-room', protect, isStaff, findStayByRoomNumberForCheckout);
 router.post('/checkout/:stayId/create-payment', protect, isStaff, createCheckoutPayment);
 router.post('/checkout/:stayId/verify-payment', protect, isStaff, verifyCheckoutPayment);
