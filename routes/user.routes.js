@@ -16,7 +16,8 @@ const {
   getStaffById,
   updateStaff,
   deleteStaff, 
-  updateUserAvatar
+  updateUserAvatar,
+  uploadPhotoFace
 } = require('../controllers/user.controller');
 
 const { protect, isAdmin } = require('../middlewares/auth.middleware');
@@ -24,6 +25,13 @@ const upload = require('../middlewares/upload.middleware');             //upload
 const User = require('../models/user.model');
 const uploadUserAvatar = upload({
   folderPrefix: 'grand-hotel/avatars/users',
+  model: User,
+  nameField: 'username'
+});
+
+// Upload middleware cho photoFace
+const uploadUserPhotoFace = upload({
+  folderPrefix: 'grand-hotel/photoFace/users',
   model: User,
   nameField: 'username'
 });
@@ -63,6 +71,9 @@ router.get('/:id', protect, getUserById);
 
 // update user avatar only
 router.put('/:id/avatar', protect, uploadUserAvatar.single('avatar'), updateUserAvatar);
+
+// upload user photoFace
+router.put('/:id/photoFace', protect, uploadUserPhotoFace.single('photoFace'), uploadPhotoFace);
 
 router.put('/:id', protect, uploadUserAvatar.single('avatar'), updateUser);
 
