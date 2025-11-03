@@ -4,6 +4,14 @@ const Reservation = require('../models/reservationModel');
 const User = require('../models/user.model');
 const Hotel = require('../models/hotelModel');
 
+// Get io instance for emitting events
+let io;
+const setSocketIO = (socketIO) => {
+  io = socketIO;
+};
+
+module.exports.setSocketIO = setSocketIO;
+
 // Helper: Kiểm tra reservation active
 const isReservationActive = (reservation) => {
   const now = new Date();
@@ -212,12 +220,21 @@ const sendMessage = async (req, res) => {
     conversation.unread = 0; // Staff đã phản hồi
     await conversation.save();
 
-    res.status(201).json({
+    // Emit real-time event
+    const messageData = {
       id: message._id.toString(),
       from: message.from,
       text: message.text,
-      time: message.time.toISOString()
-    });
+      time: message.time.toISOString(),
+      threadId
+    };
+
+    if (io) {
+      // Emit to conversation room
+      io.to(threadId).emit('new_message', messageData);
+    }
+
+    res.status(201).json(messageData);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -302,12 +319,41 @@ const sendMessageFromCustomer = async (req, res) => {
     conversation.unread += 1;
     await conversation.save();
 
-    res.status(201).json({
+    // Emit real-time event
+    const messageData = {
       id: message._id.toString(),
       from: message.from,
       text: message.text,
-      time: message.time.toISOString()
-    });
+      time: message.time.toISOString(),
+      threadId
+    };
+
+    if (io) {
+      // Emit to conversation room
+      io.to(threadId).emit('new_message', messageData);
+
+      // Notify staff about new message
+      const staffSockets = [];
+      const activeUsers = require('./socketController').activeUsers || new Map();
+
+      for (const [userId, socketId] of activeUsers.entries()) {
+        const user = await User.findById(userId);
+        if (user && user.role === 'staff' && user.hotelId?.toString() === conversation.hotel.toString()) {
+          staffSockets.push(socketId);
+        }
+      }
+
+      // Emit notification to staff
+      staffSockets.forEach(socketId => {
+        io.to(socketId).emit('conversation_updated', {
+          threadId,
+          unread: conversation.unread,
+          lastMessage: messageData
+        });
+      });
+    }
+
+    res.status(201).json(messageData);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -438,6 +484,7 @@ const getCustomerConversation = async (req, res) => {
 };
 
 module.exports = {
+  setSocketIO,
   getConversations,
   getConversationById,
   sendMessage,

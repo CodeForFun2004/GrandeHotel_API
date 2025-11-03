@@ -31,10 +31,19 @@ const roomTypesRoutes = require('./routes/roomTypesRoutes');
 const favoriteRoutes = require('./routes/favoriteRoutes');
 const chatbotRoutes = require('./routes/chatbot.routes');
 const chatRoutes = require('./routes/chat.routes');
+const { authenticateSocket } = require('./middlewares/socketAuth.middleware');
+const { handleSocketConnection } = require('./controllers/socketController');
 
 
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: ['http://localhost:5173', 'http://10.0.2.2:8080', 'http://10.0.2.2'],
+    methods: ['GET', 'POST']
+  }
+});
 // Configure CORS explicitly
 app.use(cors({
   origin: ['http://localhost:5173', 'http://10.0.2.2:8080', 'http://10.0.2.2'], // Allow emulator and local origins
@@ -72,9 +81,18 @@ app.use('/api/favorites', favoriteRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 app.use('/api', chatRoutes);
 
+// Socket.IO authentication middleware
+io.use(authenticateSocket);
+
+// Initialize socket event handlers
+handleSocketConnection(io);
+
+// Pass io instance to chat controller for REST API real-time events
+const chatController = require('./controllers/chatController');
+chatController.setSocketIO(io);
 
 const PORT = process.env.PORT || 1000;
 
-app.listen(PORT, '0.0.0.0', () =>{
+server.listen(PORT, '0.0.0.0', () =>{
    console.log(`🚀 HHHHHHH Server running on http://localhost:${PORT}`)
 });
