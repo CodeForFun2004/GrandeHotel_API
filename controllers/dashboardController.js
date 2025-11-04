@@ -434,13 +434,18 @@ async function listActiveStaysForCheckout(req, res) {
     for (const stay of stays) {
       for (const d of (stay.details || [])) {
         const rt = d.roomType;
-        const reservation = stay.reservation;
+        // reservation may be null for walk-ins; handle gracefully
+        const reservation = stay.reservation || null;
         const payment = reservation ? payMap.get(String(reservation._id)) : null;
-        const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(reservation.checkInDate);
+        // Determine check-in anchor: prefer actualCheckIn, then reservation.checkInDate, then stay.createdAt
+        let checkInAt;
+        if (stay.actualCheckIn) checkInAt = new Date(stay.actualCheckIn);
+        else if (reservation && reservation.checkInDate) checkInAt = new Date(reservation.checkInDate);
+        else checkInAt = new Date(stay.createdAt || Date.now());
         const nightsSoFar = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
-        const baseGuestName = reservation?.customer?.fullname || '—';
-        const phone = reservation?.customer?.phone || '—';
-        const email = reservation?.customer?.email || '—';
+        const baseGuestName = reservation?.customer?.fullname || (stay.customer && stay.customer.fullname) || '—';
+        const phone = reservation?.customer?.phone || (stay.customer && stay.customer.phone) || '—';
+        const email = reservation?.customer?.email || (stay.customer && stay.customer.email) || '—';
         const deposit = payment ? Number(payment.depositAmount || 0) : 0;
 
         // Preferred path: roomStays
@@ -452,6 +457,9 @@ async function listActiveStaysForCheckout(req, res) {
             const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
             const guestName = baseGuestName || (rs.idVerification?.nameOnId) || '—';
 
+            const checkInValue = reservation && reservation.checkInDate ? new Date(reservation.checkInDate) : (stay.actualCheckIn ? new Date(stay.actualCheckIn) : null);
+            const checkOutValue = reservation && reservation.checkOutDate ? new Date(reservation.checkOutDate) : null;
+
             items.push({
               stayId: String(stay._id),
               roomId: String(room?._id || ''),
@@ -460,8 +468,8 @@ async function listActiveStaysForCheckout(req, res) {
               email,
               roomType: rt?.name || '—',
               roomNumber: room?.roomNumber || room?.name || '—',
-              checkIn: new Date(reservation.checkInDate),
-              checkOutPlan: new Date(reservation.checkOutDate),
+              checkIn: checkInValue,
+              checkOutPlan: checkOutValue,
               pricePerNight,
               nightsSoFar,
               deposit,
@@ -473,6 +481,10 @@ async function listActiveStaysForCheckout(req, res) {
             // Only list rooms that are still occupied
             if (room?.status && room.status !== 'Occupied') continue;
             const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
+
+            const checkInValue = reservation && reservation.checkInDate ? new Date(reservation.checkInDate) : (stay.actualCheckIn ? new Date(stay.actualCheckIn) : null);
+            const checkOutValue = reservation && reservation.checkOutDate ? new Date(reservation.checkOutDate) : null;
+
             items.push({
               stayId: String(stay._id),
               roomId: String(room?._id || ''),
@@ -481,8 +493,8 @@ async function listActiveStaysForCheckout(req, res) {
               email,
               roomType: rt?.name || '—',
               roomNumber: room?.roomNumber || room?.name || '—',
-              checkIn: new Date(reservation.checkInDate),
-              checkOutPlan: new Date(reservation.checkOutDate),
+              checkIn: checkInValue,
+              checkOutPlan: checkOutValue,
               pricePerNight,
               nightsSoFar,
               deposit,
