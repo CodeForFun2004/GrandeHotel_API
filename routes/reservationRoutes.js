@@ -5,8 +5,8 @@ const router = express.Router();
 const reservationController = require('../controllers/reservationController');
 const { protect } = require('../middlewares/auth.middleware');
 
-// Minimal reservation creation: selects room types and quantities only
-router.post('/', reservationController.createReservation); // Tạm thời bỏ protect để test
+// Minimal reservation creation: selects room types and quantities only (requires auth)
+router.post('/', protect, reservationController.createReservation);
 router.get('/', reservationController.getAllReservations);
 // Approve or cancel reservation with reason (PUT /:id/approve with body: { action: 'approve'|'cancel', reason?: 'string' })
 router.put('/:id/approve', reservationController.approveReservation);
