@@ -39,6 +39,10 @@ const { handleSocketConnection } = require('./controllers/socketController');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
+  // Heartbeat configuration - Server-side
+  pingTimeout: 600000,     // 60 giây: thời gian chờ pong từ client
+  pingInterval: 25000,    // 25 giây: khoảng cách giữa các ping
+  maxHttpBufferSize: 1e8, // Tăng buffer size cho messages lớn
   cors: {
     origin: ['http://localhost:5173', 'http://10.0.2.2:8080', 'http://10.0.2.2'],
     methods: ['GET', 'POST']

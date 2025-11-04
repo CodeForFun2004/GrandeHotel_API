@@ -227,23 +227,20 @@ exports.approveReservation = async (req, res) => {
                     }
                 }
 
-        // Tạo Conversation nếu approved và trong khoảng active
+        // Tạo Conversation nếu approved
         if (action === 'approve') {
-          const now = new Date();
-          if (now >= updatedReservation.checkInDate && now <= updatedReservation.checkOutDate) {
-            const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
-            if (!existingConv) {
-              const conv = new Conversation({
-                threadId: `T-${updatedReservation._id}`,
-                hotel: updatedReservation.hotel,
-                customer: updatedReservation.customer,
-                reservation: updatedReservation._id,
-                lastMessageAt: new Date(),
-                unread: 0,
-                pinned: false
-              });
-              await conv.save();
-            }
+          const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
+          if (!existingConv) {
+            const conv = new Conversation({
+              threadId: `T-${updatedReservation._id}`,
+              hotel: updatedReservation.hotel,
+              customer: updatedReservation.customer,
+              reservation: updatedReservation._id,
+              lastMessageAt: new Date(),
+              unread: 0,
+              pinned: false
+            });
+            await conv.save();
           }
         }
 
@@ -844,23 +841,20 @@ exports.updateReservationStatus = async (req, res) => {
             { new: true }
         );
 
-        // Tạo Conversation nếu completed và trong khoảng active
+        // Tạo Conversation nếu completed
         if (status === 'completed') {
-          const now = new Date();
-          if (now >= updatedReservation.checkInDate && now <= updatedReservation.checkOutDate) {
-            const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
-            if (!existingConv) {
-              const conv = new Conversation({
-                threadId: `T-${updatedReservation._id}`,
-                hotel: updatedReservation.hotel,
-                customer: updatedReservation.customer,
-                reservation: updatedReservation._id,
-                lastMessageAt: new Date(),
-                unread: 0,
-                pinned: false
-              });
-              await conv.save();
-            }
+          const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
+          if (!existingConv) {
+            const conv = new Conversation({
+              threadId: `T-${updatedReservation._id}`,
+              hotel: updatedReservation.hotel,
+              customer: updatedReservation.customer,
+              reservation: updatedReservation._id,
+              lastMessageAt: new Date(),
+              unread: 0,
+              pinned: false
+            });
+            await conv.save();
           }
         }
 
