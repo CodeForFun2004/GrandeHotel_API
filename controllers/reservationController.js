@@ -89,7 +89,9 @@ exports.createReservation = async (req, res) => {
             detailsToInsert.push({
                 roomType: roomType._id,
                 quantity: qty,
-                price: detailTotal,
+                adults: Number(item.adults ?? 1),
+                children: Number(item.children ?? 0),
+                infants: Number(item.infants ?? 0),
                 services: serviceEntries,
             });
         }
@@ -124,6 +126,14 @@ exports.createReservation = async (req, res) => {
         // --- BƯỚC 5: TẠO RESERVATION DETAILS ---
         const detailsWithReservation = detailsToInsert.map(d => ({ reservation: reservation._id, ...d }));
         await ReservationDetail.insertMany(detailsWithReservation);
+
+        // Allocate rooms immediately after reservation is created so reservedRooms is persisted
+        let allocation = null;
+        try {
+            allocation = await allocateRoomsForReservation(reservation);
+        } catch (allocErr) {
+            console.warn('[CREATE_RESERVATION] Allocation on creation failed:', allocErr.message);
+        }
         
         // --- BƯỚC 6: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
          // Sử dụng ID đơn giản để tránh lỗi URL encoding
@@ -146,7 +156,8 @@ exports.createReservation = async (req, res) => {
                 requiredAmount: amountToPay,
                 vietQRLink: vietQRLink, // Trả về link QR để khách hàng thanh toán
                 isFullPaymentRequested: isFullPayment
-            }
+            },
+            allocation
         });
 
     } catch (error) {
@@ -183,7 +194,7 @@ exports.approveReservation = async (req, res) => {
 
         let updateData = {};
 
-        if (action === 'approve') {
+                if (action === 'approve') {
         // Tạo QR Code Token Check-in khi APPROVED
         const checkinToken = generateCheckinToken(); 
             updateData = {
@@ -204,6 +215,17 @@ exports.approveReservation = async (req, res) => {
             updateData,
             { new: true }
         );
+
+                // Allocate rooms immediately upon approval so reservation details have reservedRooms
+                // This addresses the issue where reservedRooms remained empty after confirming reservations.
+                let allocation = null;
+                if (action === 'approve') {
+                    try {
+                        allocation = await allocateRoomsForReservation(updatedReservation);
+                    } catch (allocErr) {
+                        console.warn('[APPROVE] Allocation failed after approval:', allocErr.message);
+                    }
+                }
 
         // Tạo Conversation nếu approved và trong khoảng active
         if (action === 'approve') {
@@ -232,6 +254,7 @@ exports.approveReservation = async (req, res) => {
         return res.status(200).json({
             message: message,
             reservation: updatedReservation,
+            allocation
         });
 
     } catch (error) {
