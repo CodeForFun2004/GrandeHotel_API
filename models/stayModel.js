@@ -15,7 +15,8 @@ const idVerificationImageSchema = new mongoose.Schema({
 }, { _id: false });
 
 const idVerificationSchema = new mongoose.Schema({
-  type: { type: String, enum: ['citizen_id', 'passport', 'other'], default: 'citizen_id' },
+  // Support Vietnam CCCD/CMND and Passport; keep 'citizen_id' for backward compat
+  type: { type: String, enum: ['cccd', 'cmnd', 'passport', 'other', 'citizen_id'], default: 'cccd' },
   number: { type: String, required: true },
   nameOnId: { type: String, required: true },
   address: { type: String, default: null },
@@ -70,7 +71,9 @@ const staySchema = new mongoose.Schema({
   actualCheckOut: { type: Date, default: null },
   status: { type: String, enum: ['Checked in', 'Checked out', 'Canceled'], default: 'Checked in', index: true },
   notes: { type: String, default: null },
-  receptionist: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+  receptionist: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  // Tracks how much of prepaid (paidAmount on reservation payment) has been consumed across (partial) checkouts
+  prepaidConsumed: { type: Number, default: 0, min: 0 }
 }, { timestamps: true });
 
 // ensure one stay per reservation (active)

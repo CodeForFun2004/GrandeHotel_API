@@ -437,13 +437,18 @@ async function listActiveStaysForCheckout(req, res) {
     for (const stay of stays) {
       for (const d of (stay.details || [])) {
         const rt = d.roomType;
-        const reservation = stay.reservation;
+        // reservation may be null for walk-ins; handle gracefully
+        const reservation = stay.reservation || null;
         const payment = reservation ? payMap.get(String(reservation._id)) : null;
-        const checkInAt = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(reservation.checkInDate);
+        // Determine check-in anchor: prefer actualCheckIn, then reservation.checkInDate, then stay.createdAt
+        let checkInAt;
+        if (stay.actualCheckIn) checkInAt = new Date(stay.actualCheckIn);
+        else if (reservation && reservation.checkInDate) checkInAt = new Date(reservation.checkInDate);
+        else checkInAt = new Date(stay.createdAt || Date.now());
         const nightsSoFar = Math.max(1, Math.ceil((new Date() - checkInAt) / msPerDay));
-        const baseGuestName = reservation?.customer?.fullname || '—';
-        const phone = reservation?.customer?.phone || '—';
-        const email = reservation?.customer?.email || '—';
+        const baseGuestName = reservation?.customer?.fullname || (stay.customer && stay.customer.fullname) || '—';
+        const phone = reservation?.customer?.phone || (stay.customer && stay.customer.phone) || '—';
+        const email = reservation?.customer?.email || (stay.customer && stay.customer.email) || '—';
         const deposit = payment ? Number(payment.depositAmount || 0) : 0;
 
         // Preferred path: roomStays
@@ -455,6 +460,9 @@ async function listActiveStaysForCheckout(req, res) {
             const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
             const guestName = baseGuestName || (rs.idVerification?.nameOnId) || '—';
 
+            const checkInValue = reservation && reservation.checkInDate ? new Date(reservation.checkInDate) : (stay.actualCheckIn ? new Date(stay.actualCheckIn) : null);
+            const checkOutValue = reservation && reservation.checkOutDate ? new Date(reservation.checkOutDate) : null;
+
             items.push({
               stayId: String(stay._id),
               roomId: String(room?._id || ''),
@@ -463,8 +471,8 @@ async function listActiveStaysForCheckout(req, res) {
               email,
               roomType: rt?.name || '—',
               roomNumber: room?.roomNumber || room?.name || '—',
-              checkIn: new Date(reservation.checkInDate),
-              checkOutPlan: new Date(reservation.checkOutDate),
+              checkIn: checkInValue,
+              checkOutPlan: checkOutValue,
               pricePerNight,
               nightsSoFar,
               deposit,
@@ -476,6 +484,10 @@ async function listActiveStaysForCheckout(req, res) {
             // Only list rooms that are still occupied
             if (room?.status && room.status !== 'Occupied') continue;
             const pricePerNight = room?.pricePerNight != null ? Number(room.pricePerNight) : Number(rt?.basePrice || 0);
+
+            const checkInValue = reservation && reservation.checkInDate ? new Date(reservation.checkInDate) : (stay.actualCheckIn ? new Date(stay.actualCheckIn) : null);
+            const checkOutValue = reservation && reservation.checkOutDate ? new Date(reservation.checkOutDate) : null;
+
             items.push({
               stayId: String(stay._id),
               roomId: String(room?._id || ''),
@@ -484,8 +496,8 @@ async function listActiveStaysForCheckout(req, res) {
               email,
               roomType: rt?.name || '—',
               roomNumber: room?.roomNumber || room?.name || '—',
-              checkIn: new Date(reservation.checkInDate),
-              checkOutPlan: new Date(reservation.checkOutDate),
+              checkIn: checkInValue,
+              checkOutPlan: checkOutValue,
               pricePerNight,
               nightsSoFar,
               deposit,
@@ -567,16 +579,18 @@ async function findStayByRoomNumberForCheckout(req, res) {
     }
 
     // Amount due: nights minus deposit (50%) + services
-    let nightsDue = 0;
+    // Use paidAmount credit for accuracy: remainingCredit = paidAmount - prepaidConsumed
     let reservationPayment = null;
+    let remainingCredit = 0;
     if (stay.reservation) {
       reservationPayment = await ReservationPayment.findOne({ reservation: stay.reservation._id }).select('paymentStatus depositAmount totalPrice paidAmount');
+      const paid = Number(reservationPayment?.paidAmount || 0);
+      const consumed = Number(stay.prepaidConsumed || 0);
+      remainingCredit = Math.max(0, paid - consumed);
     }
-    const payStatus = reservationPayment?.paymentStatus;
-    if (payStatus === 'fully_paid') nightsDue = 0;
-    else if (payStatus === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
-    else nightsDue = nightsPrice;
-    const amountDue = nightsDue + servicesCost;
+    const totalCharge = nightsPrice + servicesCost;
+    const creditApplied = Math.min(remainingCredit, totalCharge);
+    const amountDue = Math.max(0, totalCharge - creditApplied);
 
     return res.json({
       stayId: stay._id,
@@ -686,12 +700,15 @@ async function createCheckoutPayment(req, res) {
         amountDue,
         nights: nights2,
         nightsPrice,
-        nightsDue,
+        nightsDue: Math.max(0, nightsPrice - Math.min(remainingCredit, nightsPrice)),
         servicesCost,
+        creditApplied,
+        remainingCreditBefore: remainingCredit,
+        remainingCreditAfter: Math.max(0, remainingCredit - creditApplied),
         description,
         suggestedPaymentMethod: paymentMethod,
         vietQRLink,
-        requiresPayment: amountDue > 0 && payStatus2 !== 'fully_paid'
+        requiresPayment: amountDue > 0
       }
     });
   } catch (error) {
@@ -727,6 +744,54 @@ async function confirmCheckout(req, res) {
     if (amountPaid != null && isNaN(Number(amountPaid))) {
       return res.status(400).json({ message: 'amountPaid must be numeric' });
     }
+
+    // Recompute current due with credit application (same logic as createCheckoutPayment)
+    const msPerDay2 = 1000 * 60 * 60 * 24;
+    const checkInAt2 = stay.actualCheckIn ? new Date(stay.actualCheckIn) : new Date(stay.reservation.checkInDate);
+    const now2 = new Date();
+    const nights2 = Math.max(1, Math.ceil((now2 - checkInAt2) / msPerDay2));
+    let nightsPrice2 = 0;
+    let servicesCost2 = 0;
+    if (roomId) {
+      const roomDoc = await Room.findById(roomId).select('_id pricePerNight');
+      nightsPrice2 = (roomDoc?.pricePerNight || 0) * nights2;
+      for (const d of stay.details) {
+        if (!Array.isArray(d.roomStays)) continue;
+        for (const rs of d.roomStays) {
+          if (String(rs.room) !== String(roomId)) continue;
+          if (!Array.isArray(rs.services)) continue;
+          for (const sv of rs.services) {
+            const unit = await ServicePrice(sv.service);
+            servicesCost2 += unit * (sv.quantity || 1);
+          }
+        }
+      }
+    } else {
+      const allRooms2 = [];
+      for (const d of stay.details) {
+        if (Array.isArray(d.roomStays) && d.roomStays.length > 0) {
+          allRooms2.push(...d.roomStays.map(rs => rs.room));
+          for (const rs of d.roomStays) {
+            if (!Array.isArray(rs.services)) continue;
+            for (const sv of rs.services) {
+              const unit = await ServicePrice(sv.service);
+              servicesCost2 += unit * (sv.quantity || 1);
+            }
+          }
+        } else if (Array.isArray(d.rooms)) {
+          allRooms2.push(...d.rooms);
+        }
+      }
+      const uniq2 = [...new Set(allRooms2.map(r => String(r)))];
+      const roomDocs2 = await Room.find({ _id: { $in: uniq2 } }).select('_id pricePerNight');
+      const priceMap2 = new Map(roomDocs2.map(rd => [String(rd._id), Number(rd.pricePerNight || 0)]));
+      for (const rid of uniq2) nightsPrice2 += (priceMap2.get(String(rid)) || 0) * nights2;
+    }
+    const resPay2 = await ReservationPayment.findOne({ reservation: stay.reservation }).select('paidAmount');
+    const remainingCredit2 = Math.max(0, Number(resPay2?.paidAmount || 0) - Number(stay.prepaidConsumed || 0));
+    const totalCharge2 = nightsPrice2 + servicesCost2;
+    const creditApplied2 = Math.min(remainingCredit2, totalCharge2);
+    const amountDue2 = Math.max(0, totalCharge2 - creditApplied2);
 
     // Set room(s) to Cleaning and mark per-room checkout when roomId is provided
     if (roomId) {
@@ -768,6 +833,11 @@ async function confirmCheckout(req, res) {
         await Room.updateMany({ _id: { $in: allRooms } }, { $set: { status: 'Cleaning' } });
       }
       stay.markModified('details');
+    }
+
+    // Consume prepaid credit used for this checkout
+    if (creditApplied2 > 0) {
+      stay.prepaidConsumed = Math.max(0, Number(stay.prepaidConsumed || 0) + creditApplied2);
     }
 
     // If payment succeeded (or assumed succeeded), update reservation payment summary
@@ -1080,24 +1150,17 @@ async function confirmCheckIn(req, res) {
       }
       selections = autoSelections;
     }
-    // Validate counts per roomType and enforce reserved rooms if exist
+    // Validate counts per roomType; allow reassignment from reserved rooms (we'll reconcile reservedRooms below)
     for (const d of details) {
       const sel = selections.find(s => String(s.roomTypeId) === String(d.roomType));
       if (!sel || !Array.isArray(sel.roomIds) || sel.roomIds.length !== d.quantity) {
         return res.status(400).json({ message: 'Selected rooms must match required quantity for each room type' });
       }
-      // if reserved rooms exist, enforce using them
-      if (Array.isArray(d.reservedRooms) && d.reservedRooms.length === d.quantity) {
-        const diff = sel.roomIds.filter(rid => !d.reservedRooms.map(r => String(r)).includes(String(rid)));
-        if (diff.length > 0) {
-          return res.status(400).json({ message: 'Please check-in using the reserved rooms for this reservation detail' });
-        }
-      }
     }
 
     // Validate rooms belong to hotel and roomType, and are Available/Reserved
     const allRoomIds = selections.flatMap(s => s.roomIds);
-    const rooms = await Room.find({ _id: { $in: allRoomIds } });
+  const rooms = await Room.find({ _id: { $in: allRoomIds } });
     if (rooms.length !== allRoomIds.length) {
       return res.status(400).json({ message: 'Some rooms not found' });
     }
@@ -1116,6 +1179,30 @@ async function confirmCheckIn(req, res) {
       }
     }
 
+    // Reconcile reservedRooms: if selection differs from reserved, release old and update to chosen ones
+    for (const d of details) {
+      const sel = selections.find(s => String(s.roomTypeId) === String(d.roomType));
+      if (!sel) continue;
+      const reservedIds = (Array.isArray(d.reservedRooms) ? d.reservedRooms : []).map(r => String(r));
+      const selectedIds = sel.roomIds.map(r => String(r));
+      const differs = reservedIds.length > 0 && (reservedIds.length !== selectedIds.length || reservedIds.some(r => !selectedIds.includes(r)));
+      if (differs) {
+        // Release rooms that were reserved but not selected now
+        const toRelease = reservedIds.filter(rid => !selectedIds.includes(rid));
+        if (toRelease.length > 0) {
+          await Room.updateMany({ _id: { $in: toRelease } }, { $set: { status: 'Available' } });
+        }
+        // Update reservation detail to reflect new selection
+        d.reservedRooms = selectedIds;
+        await d.save();
+      }
+      // If there were no reserved rooms, we can still set reservedRooms to selected for consistency
+      if (!Array.isArray(d.reservedRooms) || d.reservedRooms.length === 0) {
+        d.reservedRooms = selectedIds;
+        await d.save();
+      }
+    }
+
     // Compute nights and per-detail totalPrice (simple: roomType.basePrice * nights * quantity)
     const msPerDay = 1000 * 60 * 60 * 24;
     const nights = Math.max(1, Math.round((new Date(reservation.checkOutDate) - new Date(reservation.checkInDate)) / msPerDay));
@@ -1124,8 +1211,56 @@ async function confirmCheckIn(req, res) {
     const priceMap = new Map(roomTypeDocs.map(rt => [String(rt._id), Number(rt.basePrice || 0)]));
 
     // Build Stay.details with roomStays
+    // ID document validation helpers
     const verArray = (req.body && Array.isArray(req.body.idVerifications)) ? req.body.idVerifications : [];
-    const verMap = new Map(verArray.map(v => [String(v.roomId), v.idDocument]));
+    function normalizeType(t, num) {
+      const raw = (t || '').toString().toLowerCase();
+      if (raw === 'cccd' || raw === 'cmnd' || raw === 'passport' || raw === 'other') return raw;
+      if (raw === 'citizen_id') {
+        // Accept 9 or 12 as VN IDs; infer passport if alphanumeric 6-9
+        if (/^\d{12}$/.test(num)) return 'cccd';
+        if (/^\d{9}$/.test(num)) return 'cmnd';
+        if (/^[A-Za-z0-9]{6,9}$/.test(num)) return 'passport';
+        return 'other';
+      }
+      // Infer by pattern if missing/unknown
+      if (/^\d{12}$/.test(num)) return 'cccd';
+      if (/^\d{9}$/.test(num)) return 'cmnd';
+      if (/^[A-Za-z0-9]{6,9}$/.test(num)) return 'passport';
+      return 'other';
+    }
+    function validateIdDoc(type, number) {
+      const num = String(number || '').trim();
+      const t = normalizeType(type, num);
+      if (t === 'cccd') return { ok: /^\d{12}$/.test(num), t, num };
+      if (t === 'cmnd') return { ok: /^\d{9}$/.test(num), t, num };
+      if (t === 'passport') return { ok: /^[A-Z0-9]{6,9}$/.test(num.toUpperCase()), t, num: num.toUpperCase() };
+      if (t === 'citizen_id') return { ok: /^(?:\d{9}|\d{12})$/.test(num), t, num };
+      // other: allow 6-20 alphanumerics/hyphen
+      return { ok: /^[A-Za-z0-9-]{6,20}$/.test(num), t: 'other', num: num.toUpperCase() };
+    }
+    const verMap = new Map();
+    for (const v of verArray) {
+      const roomId = String(v.roomId);
+      const doc = v.idDocument || {};
+      if (!doc || !doc.number || !doc.nameOnId) { verMap.set(roomId, null); continue; }
+      const check = validateIdDoc(doc.type, doc.number);
+      if (!check.ok) {
+        return res.status(400).json({ message: 'Invalid ID document for check-in', roomId, type: doc.type || check.t, number: doc.number });
+      }
+      const normalized = {
+        type: check.t,
+        number: check.num,
+        nameOnId: String(doc.nameOnId).trim(),
+        address: doc.address || null,
+        images: Array.isArray(doc.images) ? doc.images.map(img => ({ publicId: img.publicId, url: img.url })) : [],
+        method: doc.method || 'manual',
+        faceScore: typeof doc.faceScore === 'number' ? doc.faceScore : null,
+        verifiedAt: new Date(),
+        verifiedBy: req.user?._id || null
+      };
+      verMap.set(roomId, normalized);
+    }
 
     const stayDetails = selections.map(s => {
       const total = (priceMap.get(String(s.roomTypeId)) || 0) * nights * s.roomIds.length;
@@ -1134,21 +1269,7 @@ async function confirmCheckIn(req, res) {
         rooms: s.roomIds,
         roomStays: s.roomIds.map(rid => {
           const doc = verMap.get(String(rid));
-          let idVerification = null;
-          if (doc && doc.number && doc.nameOnId) {
-            idVerification = {
-              type: doc.type || 'citizen_id',
-              number: String(doc.number),
-              nameOnId: String(doc.nameOnId),
-              address: doc.address || null,
-              images: Array.isArray(doc.images) ? doc.images.map(img => ({ publicId: img.publicId, url: img.url })) : [],
-              method: doc.method || 'manual',
-              faceScore: typeof doc.faceScore === 'number' ? doc.faceScore : null,
-              verifiedAt: new Date(),
-              verifiedBy: req.user?._id || null
-            };
-          }
-          return { room: rid, guests: [], services: [], idVerification };
+          return { room: rid, guests: [], services: [], idVerification: doc || null };
         }),
         totalPrice: total,
         notes: null
