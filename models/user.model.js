@@ -8,6 +8,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String },
   phone: { type: String },
   avatar: { type: String },
+  photoFace: { type: String },
   address: { type: String },
 
   // ✅ Thêm các trường mới

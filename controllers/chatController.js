@@ -2,6 +2,15 @@ const Conversation = require('../models/conversation');
 const Message = require('../models/message');
 const Reservation = require('../models/reservationModel');
 const User = require('../models/user.model');
+const Hotel = require('../models/hotelModel');
+
+// Get io instance for emitting events
+let io;
+const setSocketIO = (socketIO) => {
+  io = socketIO;
+};
+
+module.exports.setSocketIO = setSocketIO;
 
 // Helper: Kiểm tra reservation active
 const isReservationActive = (reservation) => {
@@ -211,12 +220,21 @@ const sendMessage = async (req, res) => {
     conversation.unread = 0; // Staff đã phản hồi
     await conversation.save();
 
-    res.status(201).json({
+    // Emit real-time event
+    const messageData = {
       id: message._id.toString(),
       from: message.from,
       text: message.text,
-      time: message.time.toISOString()
-    });
+      time: message.time.toISOString(),
+      threadId
+    };
+
+    if (io) {
+      // Emit to conversation room
+      io.to(threadId).emit('new_message', messageData);
+    }
+
+    res.status(201).json(messageData);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -301,12 +319,122 @@ const sendMessageFromCustomer = async (req, res) => {
     conversation.unread += 1;
     await conversation.save();
 
-    res.status(201).json({
+    // Emit real-time event
+    const messageData = {
       id: message._id.toString(),
       from: message.from,
       text: message.text,
-      time: message.time.toISOString()
-    });
+      time: message.time.toISOString(),
+      threadId
+    };
+
+    if (io) {
+      // Emit to conversation room
+      io.to(threadId).emit('new_message', messageData);
+
+      // Notify staff about new message
+      const staffSockets = [];
+      const activeUsers = require('./socketController').activeUsers || new Map();
+
+      for (const [userId, socketId] of activeUsers.entries()) {
+        const user = await User.findById(userId);
+        if (user && user.role === 'staff' && user.hotelId?.toString() === conversation.hotel.toString()) {
+          staffSockets.push(socketId);
+        }
+      }
+
+      // Emit notification to staff
+      staffSockets.forEach(socketId => {
+        io.to(socketId).emit('conversation_updated', {
+          threadId,
+          unread: conversation.unread,
+          lastMessage: messageData
+        });
+      });
+    }
+
+    res.status(201).json(messageData);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// GET /api/customer/conversations - Customer lấy danh sách conversations
+const getCustomerConversations = async (req, res) => {
+  try {
+    const customerId = req.user._id;
+    const { query, tab } = req.query;
+
+    // Lấy active reservations của customer
+    const now = new Date();
+    const activeReservations = await Reservation.find({
+      customer: customerId,
+      status: { $in: ['approved', 'completed'] },
+      checkInDate: { $lte: now },
+      checkOutDate: { $gte: now }
+    }).select('_id');
+    const activeReservationIds = activeReservations.map(r => r._id);
+
+    // Query conversations - include those with active reservations OR no reservation
+    let filter = {
+      customer: customerId,
+      $or: [
+        { reservation: { $in: activeReservationIds } },
+        { reservation: null }
+      ]
+    };
+
+    // Filter theo tab
+    if (tab === 'unread') {
+      filter.unread = { $gt: 0 };
+    } else if (tab === 'active') {
+      // 'active' nghĩa là reservation confirmed (approved/completed)
+      // Đã filter ở trên
+    }
+
+    let conversations = await Conversation.find(filter)
+      .populate('hotel', 'name address')
+      .populate('reservation', 'status checkInDate checkOutDate')
+      .sort({ lastMessageAt: -1 });
+
+    // Filter theo query (tên hotel)
+    if (query) {
+      const kw = query.toLowerCase();
+      conversations = conversations.filter(c =>
+        c.hotel.name.toLowerCase().includes(kw) ||
+        c.hotel.address.toLowerCase().includes(kw)
+      );
+    }
+
+    // Thêm lastMessage cho mỗi conversation
+    const result = await Promise.all(conversations.map(async (conv) => {
+      const lastMsg = await Message.findOne({ conversation: conv._id }).sort({ time: -1 });
+      return {
+        threadId: conv.threadId,
+        hotel: {
+          Hotel_ID: conv.hotel._id,
+          Name: conv.hotel.name,
+          Address: conv.hotel.address
+        },
+        lastMessageAt: conv.lastMessageAt.toISOString(),
+        unread: conv.unread,
+        pinned: conv.pinned,
+        booking: conv.reservation ? {
+          Reservation_ID: conv.reservation._id.toString(),
+          Status: conv.reservation.status === 'approved' || conv.reservation.status === 'completed' ? 'confirmed' : 'pending',
+          CheckIn: conv.reservation.checkInDate.toISOString().split('T')[0],
+          CheckOut: conv.reservation.checkOutDate.toISOString().split('T')[0]
+        } : null,
+        messages: lastMsg ? [{
+          id: lastMsg._id.toString(),
+          from: lastMsg.from,
+          text: lastMsg.text,
+          time: lastMsg.time.toISOString()
+        }] : []
+      };
+    }));
+
+    res.json(result);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -356,11 +484,13 @@ const getCustomerConversation = async (req, res) => {
 };
 
 module.exports = {
+  setSocketIO,
   getConversations,
   getConversationById,
   sendMessage,
   markAsRead,
   togglePin,
   sendMessageFromCustomer,
+  getCustomerConversations,
   getCustomerConversation
 };

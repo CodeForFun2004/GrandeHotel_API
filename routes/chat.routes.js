@@ -8,6 +8,7 @@ const {
   markAsRead,
   togglePin,
   sendMessageFromCustomer,
+  getCustomerConversations,
   getCustomerConversation
 } = require('../controllers/chatController');
 
@@ -35,6 +36,9 @@ staffRouter.put('/conversations/:threadId/pin', togglePin);
 const customerRouter = express.Router();
 customerRouter.use(protect);
 customerRouter.use(isCustomer);
+
+// GET /api/customer/conversations - Lấy danh sách conversations
+customerRouter.get('/conversations', getCustomerConversations);
 
 // GET /api/customer/conversations/:threadId - Xem conversation
 customerRouter.get('/conversations/:threadId', getCustomerConversation);
