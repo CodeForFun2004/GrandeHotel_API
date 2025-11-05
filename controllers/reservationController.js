@@ -124,15 +124,38 @@ exports.createReservation = async (req, res) => {
         });
 
         // --- BƯỚC 5: TẠO RESERVATION DETAILS ---
+        console.log('[CREATE_RESERVATION] Creating reservation details...', {
+            reservationId: reservation._id,
+            detailsCount: detailsToInsert.length,
+            details: detailsToInsert.map(d => ({
+                roomType: d.roomType,
+                quantity: d.quantity
+            }))
+        });
+        
         const detailsWithReservation = detailsToInsert.map(d => ({ reservation: reservation._id, ...d }));
-        await ReservationDetail.insertMany(detailsWithReservation);
+        const insertedDetails = await ReservationDetail.insertMany(detailsWithReservation);
+        
+        console.log('[CREATE_RESERVATION] Reservation details created:', {
+            insertedCount: insertedDetails.length,
+            detailIds: insertedDetails.map(d => d._id)
+        });
 
         // Allocate rooms immediately after reservation is created so reservedRooms is persisted
         let allocation = null;
         try {
+            console.log('[CREATE_RESERVATION] Starting room allocation...', {
+                reservationId: reservation._id,
+                hotelId: reservation.hotel
+            });
             allocation = await allocateRoomsForReservation(reservation);
+            console.log('[CREATE_RESERVATION] Room allocation result:', allocation);
         } catch (allocErr) {
-            console.warn('[CREATE_RESERVATION] Allocation on creation failed:', allocErr.message);
+            console.error('[CREATE_RESERVATION] Allocation on creation failed:', {
+                error: allocErr.message,
+                stack: allocErr.stack,
+                reservationId: reservation._id
+            });
         }
         
         // --- BƯỚC 6: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
@@ -567,50 +590,185 @@ exports.handlePayment = async (req, res) => {
 
 // Allocate rooms for a reservation once deposit/full payment is done
 // Strategy: for each reservation detail, pick `quantity` rooms of the given roomType in the same hotel
-// where status is one of Available/available/Active and mark them as 'Reserved'. Persist to reservedRooms.
+// where status is 'Available' and mark them as 'Reserved'. Persist to reservedRooms.
 async function allocateRoomsForReservation(reservationDoc) {
+    console.log('[ALLOCATE_ROOMS] Starting allocation process...', {
+        reservationId: reservationDoc._id,
+        isPopulated: typeof reservationDoc.populate === 'function'
+    });
+    
     const reservation = typeof reservationDoc.populate === 'function'
         ? reservationDoc
         : await Reservation.findById(reservationDoc._id);
     if (!reservation) throw new Error('Reservation not found for allocation');
 
+    console.log('[ALLOCATE_ROOMS] Reservation found:', {
+        reservationId: reservation._id,
+        hotelId: reservation.hotel,
+        status: reservation.status
+    });
+
     const details = await ReservationDetail.find({ reservation: reservation._id });
+    console.log('[ALLOCATE_ROOMS] Found reservation details:', {
+        detailsCount: details.length,
+        details: details.map(d => ({
+            detailId: d._id,
+            roomType: d.roomType,
+            quantity: d.quantity,
+            currentReservedRooms: d.reservedRooms?.length || 0
+        }))
+    });
+
+    if (details.length === 0) {
+        console.warn('[ALLOCATE_ROOMS] No reservation details found for reservation:', reservation._id);
+        return { performed: true, success: false, totalAllocated: 0, picksPerDetail: [], error: 'No reservation details found' };
+    }
+
     let totalAllocated = 0;
     const picksPerDetail = [];
 
     for (const d of details) {
+        console.log('[ALLOCATE_ROOMS] Processing detail:', {
+            detailId: d._id,
+            roomType: d.roomType,
+            quantity: d.quantity,
+            currentReservedRooms: d.reservedRooms?.length || 0
+        });
+
         // if already allocated enough, skip
         if (Array.isArray(d.reservedRooms) && d.reservedRooms.length >= d.quantity) {
+            console.log('[ALLOCATE_ROOMS] Detail already fully allocated, skipping:', {
+                detailId: d._id,
+                alreadyAllocated: d.reservedRooms.length,
+                required: d.quantity
+            });
             picksPerDetail.push({ detailId: d._id, alreadyAllocated: d.reservedRooms.length });
             continue;
         }
 
         const need = d.quantity - (Array.isArray(d.reservedRooms) ? d.reservedRooms.length : 0);
-        if (need <= 0) continue;
+        if (need <= 0) {
+            console.log('[ALLOCATE_ROOMS] No rooms needed for this detail:', {
+                detailId: d._id,
+                need: need
+            });
+            continue;
+        }
 
+        console.log('[ALLOCATE_ROOMS] Searching for available rooms:', {
+            detailId: d._id,
+            hotelId: reservation.hotel,
+            hotelIdType: typeof reservation.hotel,
+            hotelIdString: String(reservation.hotel),
+            roomTypeId: d.roomType,
+            roomTypeIdType: typeof d.roomType,
+            roomTypeIdString: String(d.roomType),
+            need: need,
+            searchStatus: 'Available'
+        });
+
+        // DEBUG: Check all rooms in this hotel with this roomType (regardless of status)
+        const allRoomsInHotel = await Room.find({
+            hotel: reservation.hotel,
+            roomType: d.roomType
+        }).select('_id status roomNumber hotel roomType');
+        
+        console.log('[ALLOCATE_ROOMS] DEBUG - All rooms in hotel with this roomType:', {
+            detailId: d._id,
+            totalRoomsFound: allRoomsInHotel.length,
+            rooms: allRoomsInHotel.map(r => ({
+                roomId: r._id,
+                roomNumber: r.roomNumber,
+                status: r.status,
+                statusType: typeof r.status,
+                hotelId: r.hotel,
+                hotelIdString: String(r.hotel),
+                roomTypeId: r.roomType,
+                roomTypeIdString: String(r.roomType)
+            })),
+            statusCounts: allRoomsInHotel.reduce((acc, r) => {
+                acc[r.status] = (acc[r.status] || 0) + 1;
+                return acc;
+            }, {})
+        });
+
+        // Note: Room model enum only has: ['Reserved', 'Available', 'Maintenance','Cleaning','Occupied']
+        // So we only search for 'Available' status
         const candidates = await Room.find({
             hotel: reservation.hotel,
             roomType: d.roomType,
-            status: { $in: ['Available', 'available', 'Active'] }
-        }).select('_id').limit(need);
+            status: 'Available' // Only search for 'Available' status as per Room model enum
+        }).select('_id status roomNumber').limit(need);
+
+        console.log('[ALLOCATE_ROOMS] Found candidate rooms:', {
+            detailId: d._id,
+            candidatesCount: candidates.length,
+            needed: need,
+            candidates: candidates.map(c => ({
+                roomId: c._id,
+                roomNumber: c.roomNumber,
+                status: c.status
+            }))
+        });
 
         if (candidates.length < need) {
-            picksPerDetail.push({ detailId: d._id, allocated: candidates.length, needed: need });
+            console.warn('[ALLOCATE_ROOMS] Not enough available rooms:', {
+                detailId: d._id,
+                found: candidates.length,
+                needed: need,
+                roomType: d.roomType
+            });
+            picksPerDetail.push({ detailId: d._id, allocated: candidates.length, needed: need, error: 'Insufficient available rooms' });
             continue; // partial or none; we won't fail the whole flow
         }
 
         const pickIds = candidates.map(c => c._id);
+        console.log('[ALLOCATE_ROOMS] Allocating rooms:', {
+            detailId: d._id,
+            roomIds: pickIds,
+            count: pickIds.length
+        });
+
         // mark rooms Reserved
-        await Room.updateMany({ _id: { $in: pickIds } }, { $set: { status: 'Reserved' } });
+        const updateResult = await Room.updateMany({ _id: { $in: pickIds } }, { $set: { status: 'Reserved' } });
+        console.log('[ALLOCATE_ROOMS] Rooms marked as Reserved:', {
+            detailId: d._id,
+            matchedCount: updateResult.matchedCount,
+            modifiedCount: updateResult.modifiedCount
+        });
+
         // persist in detail
-        d.reservedRooms = [...(d.reservedRooms || []), ...pickIds];
+        const previousReservedRooms = d.reservedRooms || [];
+        d.reservedRooms = [...previousReservedRooms, ...pickIds];
+        
+        console.log('[ALLOCATE_ROOMS] Saving reservation detail with reservedRooms:', {
+            detailId: d._id,
+            previousCount: previousReservedRooms.length,
+            newCount: d.reservedRooms.length,
+            reservedRooms: d.reservedRooms
+        });
+        
         await d.save();
+        
+        // Verify the save
+        const savedDetail = await ReservationDetail.findById(d._id);
+        console.log('[ALLOCATE_ROOMS] Verified saved detail:', {
+            detailId: savedDetail._id,
+            reservedRoomsCount: savedDetail.reservedRooms?.length || 0,
+            reservedRooms: savedDetail.reservedRooms
+        });
 
         totalAllocated += pickIds.length;
-        picksPerDetail.push({ detailId: d._id, allocated: pickIds.length });
+        picksPerDetail.push({ detailId: d._id, allocated: pickIds.length, roomIds: pickIds });
     }
 
     const success = picksPerDetail.every(p => (p.alreadyAllocated ?? 0) + (p.allocated ?? 0) >= (details.find(x => String(x._id) === String(p.detailId))?.quantity || 0));
+
+    console.log('[ALLOCATE_ROOMS] Allocation completed:', {
+        success: success,
+        totalAllocated: totalAllocated,
+        picksPerDetail: picksPerDetail
+    });
 
     return { performed: true, success, totalAllocated, picksPerDetail };
 }

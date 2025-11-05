@@ -573,3 +573,81 @@ exports.deleteStaff = async (req, res) => {
     res.status(500).json({ message: 'Failed to delete staff account', error: err.message });
   }
 };
+
+
+// ---------------------- Upload Citizen Identification ----------------------
+exports.uploadCitizenIdentification = async (req, res) => {
+  try {
+    const userId = req.user ? req.user.id : req.params.id; // case user tự upload hoặc admin update
+    const { type, value } = req.body; // type = "cccd" | "cmnd" | "passport"
+
+    if (!type || !value) {
+      return res.status(400).json({ message: "Thiếu dữ liệu type hoặc value" });
+    }
+
+    // Validate độ dài ký tự
+    const patterns = {
+      cccd: /^[0-9]{12}$/,          // CCCD đúng 12 số
+      cmnd: /^[0-9]{9}$/,           // CMND đúng 9 số
+      passport: /^[A-Za-z0-9]{6,9}$/ // Passport 6–9 ký tự chữ/số
+    };
+
+    if (!patterns[type].test(value)) {
+      return res.status(400).json({
+        message: `Số ${type.toUpperCase()} không hợp lệ`,
+        rule: type === "cccd"
+          ? "CCCD phải đúng 12 số"
+          : type === "cmnd"
+            ? "CMND phải đúng 9 số"
+            : "Passport phải từ 6–9 ký tự"
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+    // Reset trường còn lại để tránh lưu cả 2 loại
+    user.cccd = type === "cccd" ? value : null;
+    user.cmnd = type === "cmnd" ? value : null;
+
+    await user.save();
+
+    res.json({
+      message: "Cập nhật giấy tờ thành công",
+      data: { type, value }
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: "Lỗi server", error: err.message });
+  }
+};
+
+
+// ---------------------- Check CCCD / CMND ----------------------
+exports.checkCitizenIdentification = async (req, res) => {
+  try {
+    const { value } = req.body;
+
+    if (!value) {
+      return res.status(400).json({ message: "Vui lòng nhập số giấy tờ để kiểm tra" });
+    }
+
+    const user = await User.findOne({
+      $or: [{ cccd: value }, { cmnd: value }]
+    }).select("fullname cccd cmnd");
+
+    if (!user) {
+      return res.status(404).json({
+        message: "Không khớp giấy tờ nào trong hệ thống"
+      });
+    }
+
+    res.json({
+      message: "Khớp giấy tờ",
+      user
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: "Lỗi server", error: err.message });
+  }
+};

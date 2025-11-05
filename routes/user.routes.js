@@ -17,7 +17,9 @@ const {
   updateStaff,
   deleteStaff, 
   updateUserAvatar,
-  uploadPhotoFace
+  uploadPhotoFace,
+  uploadCitizenIdentification,
+  checkCitizenIdentification
 } = require('../controllers/user.controller');
 
 const { protect, isAdmin } = require('../middlewares/auth.middleware');
@@ -123,5 +125,8 @@ router.delete('/admin/staff/:id', protect, isAdmin, deleteStaff);
 // @desc    Xóa người dùng
 // @access  Private/Admin
 router.delete('/admin/:id', protect, isAdmin, deleteUser);
+
+router.put("/:id/upload-citizen-id", protect, uploadCitizenIdentification); 
+router.post("/check-citizen-id", checkCitizenIdentification); 
 
 module.exports = router;
