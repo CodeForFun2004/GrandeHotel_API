@@ -575,7 +575,7 @@ async function allocateRoomsForReservation(reservationDoc) {
     if (!reservation) throw new Error('Reservation not found for allocation');
 
     const details = await ReservationDetail.find({ reservation: reservation._id });
-    let totalAllocated = 0;
+    let totalAllocated = 1;
     const picksPerDetail = [];
 
     for (const d of details) {
