@@ -11,6 +11,9 @@ const userSchema = new mongoose.Schema({
   photoFace: { type: String },
   address: { type: String },
 
+  cccd: { type: String },
+  cmnd: { type: String },
+
   // ✅ Thêm các trường mới
   gender: {
     type: String,
