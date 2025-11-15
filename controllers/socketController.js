@@ -21,11 +21,14 @@ const isReservationActive = (reservation) => {
 // Socket event handlers
 const handleSocketConnection = (io) => {
   io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.user.email} (${socket.user.role})`);
+    console.log(`🔌 User connected: ${socket.user.email} (${socket.user.role}) - Socket ID: ${socket.id}`);
 
     // Store user connection
     activeUsers.set(socket.user.id.toString(), socket.id);
     socketToUser.set(socket.id, socket.user.id.toString());
+
+    // Monitor connection health (heartbeat happens automatically)
+    console.log(`💓 Heartbeat active for ${socket.user.email}: ping every 25s, timeout 60s`);
 
     // Join user-specific room for notifications
     socket.join(`user_${socket.user.id}`);

@@ -8,6 +8,9 @@ const Stay = require('../models/stayModel');
 // Use the reservation-scoped Payment summary model for all payment state
 const ReservationPayment = require('../models/paymentModel');
 const Service = require('../models/serviceModel');
+// Chat models for deletion after checkout
+const Conversation = require('../models/conversation');
+const Message = require('../models/message');
 // VietQR generator reused for checkout payments
 const { generateVietQR } = require('../services/payment.service');
 
@@ -873,7 +876,41 @@ async function confirmCheckout(req, res) {
     } else {
       await stay.save();
     }
-    return res.status(200).json({ message: 'Checkout completed', stayId: stay._id, fullyCheckedOut: allChecked, creditApplied: creditApplied2, amountDue: amountDue2 });
+
+    // === [OPTIONAL] XÓA CONVERSATION VÀ MESSAGES SAU CHECKOUT ===
+    // Chỉ xóa khi checkout hoàn toàn (tất cả phòng đã checkout)
+    if (allChecked && stay.reservation) {
+      try {
+        // Tìm conversation liên quan đến reservation này
+        const conversation = await Conversation.findOne({ reservation: stay.reservation._id });
+
+        if (conversation) {
+          // Đếm số messages trước khi xóa để audit
+          const messageCount = await Message.countDocuments({ conversation: conversation._id });
+
+          // Xóa tất cả messages trong conversation
+          await Message.deleteMany({ conversation: conversation._id });
+
+          // Xóa conversation
+          await Conversation.findByIdAndDelete(conversation._id);
+
+          // Audit logging
+          console.log(`[CHECKOUT] Chat deleted for reservation ${stay.reservation._id}:`, {
+            conversationId: conversation._id,
+            threadId: conversation.threadId,
+            messagesDeleted: messageCount,
+            deletedBy: req.user?._id || 'system',
+            deletedAt: new Date()
+          });
+        }
+      } catch (chatDeleteError) {
+        // Log lỗi nhưng không fail checkout
+        console.error(`[CHECKOUT] Failed to delete chat for reservation ${stay.reservation._id}:`, chatDeleteError);
+        // Có thể gửi notification cho admin về lỗi này trong tương lai
+      }
+    }
+
+    return res.status(200).json({ message: 'Checkout completed', stayId: stay._id, fullyCheckedOut: allChecked });
   } catch (error) {
     console.error('Error confirming checkout:', error);
     res.status(500).json({ message: 'Server error' });
