@@ -17,6 +17,9 @@ router.get('/staff', protect, isStaff, roomController.getRoomsForStaff);
 // Public: list ALL rooms across hotels (no auth)
 router.get('/all', roomController.getAdminRooms);
 
+// Public room detail: allow UI to fetch a single room without requiring manager role
+router.get('/public/:id', roomController.getRoomById);
+
 // Room Management Routes (for hotel managers - check permissions)
 router.get('/', protect, isHotelManager, roomController.getAllRooms);
 router.get('/:id', protect, isHotelManager, roomController.getRoomById);
