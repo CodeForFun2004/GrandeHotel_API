@@ -10,6 +10,8 @@ const { protect } = require('../middlewares/auth.middleware');
 router.post('/', protect, reservationController.createReservation);
 
 router.get('/', reservationController.getAllReservations);
+// Get all reservations for the current authenticated user (must be before /:id route)
+router.get('/me', protect, reservationController.getUserReservations);
 // Approve or cancel reservation with reason (PUT /:id/approve with body: { action: 'approve'|'cancel', reason?: 'string' })
 router.put('/:id/approve', reservationController.approveReservation);
 // Select payment option and generate QR code (POST /:id/payment-options with body: { paymentType: 'full'|'deposit' })
