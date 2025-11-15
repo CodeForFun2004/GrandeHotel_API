@@ -578,8 +578,8 @@ async function findStayByRoomNumberForCheckout(req, res) {
       }
     }
 
-    // Amount due: nights minus deposit (50%) + services
-    // Use paidAmount credit for accuracy: remainingCredit = paidAmount - prepaidConsumed
+    // Amount due: use paidAmount credit for accuracy, no tax
+    // remainingCredit = total already paid - prepaidConsumed (credit used in previous checkouts)
     let reservationPayment = null;
     let remainingCredit = 0;
     if (stay.reservation) {
@@ -591,6 +591,7 @@ async function findStayByRoomNumberForCheckout(req, res) {
     const totalCharge = nightsPrice + servicesCost;
     const creditApplied = Math.min(remainingCredit, totalCharge);
     const amountDue = Math.max(0, totalCharge - creditApplied);
+    const nightsDue = Math.max(0, nightsPrice - Math.min(remainingCredit, nightsPrice));
 
     return res.json({
       stayId: stay._id,
@@ -668,16 +669,16 @@ async function createCheckoutPayment(req, res) {
         nightsPrice += (priceMap2.get(String(rid)) || 0) * nights2;
       }
     }
-    let nightsDue = 0;
+    // Compute amount due using paidAmount credit (no tax)
     let reservationPayment2 = null;
+    let remainingCredit = 0;
     if (stay.reservation) {
       reservationPayment2 = await ReservationPayment.findOne({ reservation: stay.reservation._id }).select('paymentStatus depositAmount totalPrice paidAmount');
+      remainingCredit = Math.max(0, Number(reservationPayment2?.paidAmount || 0) - Number(stay.prepaidConsumed || 0));
     }
-    const payStatus2 = reservationPayment2?.paymentStatus;
-    if (payStatus2 === 'fully_paid') nightsDue = 0;
-    else if (payStatus2 === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
-    else nightsDue = nightsPrice;
-    const amountDue = nightsDue + servicesCost;
+    const totalCharge = nightsPrice + servicesCost;
+    const creditApplied = Math.min(remainingCredit, totalCharge);
+    const amountDue = Math.max(0, totalCharge - creditApplied);
 
   // Return a checkout payload; we don't create a separate ledger model here.
   const description = `checkedout - ${stay._id} - ${amountDue} - ${stay.hotel?.name || 'HOTEL'}`;
@@ -974,11 +975,10 @@ async function verifyCheckoutPayment(req, res) {
     const resPay = await ReservationPayment.findOne({ reservation: stay.reservation._id });
     if (!resPay) return res.status(404).json({ message: 'Payment summary not found for reservation' });
 
-    let nightsDue = 0;
-    if (resPay.paymentStatus === 'fully_paid') nightsDue = 0;
-    else if (resPay.paymentStatus === 'deposit_paid') nightsDue = Math.round(nightsPrice * 0.5);
-    else nightsDue = nightsPrice;
-    const amountDue = nightsDue + servicesCost;
+  // Use credit from paidAmount instead of deposit status; no tax
+  const remainingCredit = Math.max(0, Number(resPay.paidAmount || 0) - Number(stay.prepaidConsumed || 0));
+  const totalCharge = nightsPrice + servicesCost;
+  const amountDue = Math.max(0, totalCharge - Math.min(remainingCredit, totalCharge));
     if (amountDue <= 0) {
       return res.status(200).json({ message: 'No amount due. Nothing to verify.', payment: resPay, amountDue: 0 });
     }

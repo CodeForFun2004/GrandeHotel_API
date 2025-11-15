@@ -1,3 +1,5 @@
+const mongoose = require('mongoose');
+const connectDB = require('../config/database');
 const User = require('../models/user.model');
 const Hotel = require('../models/hotelModel');
 
@@ -35,4 +37,19 @@ module.exports = async function seedUsers() {
   const created = await User.insertMany(users);
   console.log(`👤 Seeded ${created.length} users`);
   return created;
+}
+
+// Allow running individually
+if (require.main === module) {
+  (async () => {
+    try {
+      await connectDB();
+      await module.exports();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      await mongoose.connection.close();
+      process.exit(0);
+    }
+  })();
 }

@@ -489,6 +489,94 @@ exports.getAllRooms = async (req, res) => {
         });
     }
 };
+// Similar to getAllRooms but accessible to staff role
+exports.getRoomsForStaff = async (req, res) => {
+    try {
+        // Get staff's hotel ID
+        const hotelId = req.user?.hotelId || req.user?.storeId;
+        if (!hotelId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Staff hotel ID not found'
+            });
+        }
+
+        // Pagination
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // Search and filter
+        const search = req.query.search || '';
+        const status = req.query.status;
+        const type = req.query.type;
+
+        // Build query
+        let query = { hotel: hotelId };
+
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { code: { $regex: search, $options: 'i' } },
+                { roomNumber: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        if (status) {
+            query.status = status;
+        }
+
+        if (type) {
+            query.roomType = type;
+        }
+
+        // Get total count
+        const total = await Room.countDocuments(query);
+
+        // Get rooms with pagination
+        const rooms = await Room.find(query)
+            .populate('roomType', 'name basePrice maxCapacity amenities capacity')
+            .populate('hotel', 'name address')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // Transform data to match frontend format
+        const transformedData = rooms.map(room => ({
+            id: room._id,
+            code: room.code,
+            name: room.name,
+            type: room.roomType?._id || room.roomType,
+            capacity: room.capacity,
+            pricePerNight: room.pricePerNight,
+            status: room.status,
+            description: room.description,
+            images: room.images || [],
+            roomType: room.roomType,
+            hotel: room.hotel,
+            roomNumber: room.roomNumber
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: transformedData,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            },
+            message: 'Rooms retrieved successfully'
+        });
+    } catch (error) {
+        console.error('Error getting rooms for staff:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+};
 exports.getRoomById = async (req, res) => {
     const roomId = req.params.id;
     try {
@@ -534,10 +622,11 @@ exports.searchRooms = async (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.max(parseInt(req.query.limit) || 10, 1);
 
-        // Step 1: Get all rooms of this hotel (not under maintenance)
+        // Step 1: Get only rooms that are actually Available for booking
+        // We restrict to status 'Available' (case-insensitive variants supported)
         const allRooms = await Room.find({
             hotel: hotelId,
-            status: { $ne: 'maintenance' }
+            status: { $in: ['Available', 'available'] }
         }).populate('roomType');
 
         // If no dates provided, return grouped rooms without reservation checks

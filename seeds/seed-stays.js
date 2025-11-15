@@ -1,3 +1,5 @@
+const mongoose = require('mongoose');
+const connectDB = require('../config/database');
 const Stay = require('../models/stayModel');
 const Reservation = require('../models/reservationModel');
 const Room = require('../models/roomModel');
@@ -31,4 +33,19 @@ module.exports = async function seedStays() {
 
   console.log(`🛌 Seeded 1 stay for reservation ${String(reservation._id).slice(-6).toUpperCase()}`);
   return stay;
+}
+
+// Allow running individually
+if (require.main === module) {
+  (async () => {
+    try {
+      await connectDB();
+      await module.exports();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      await mongoose.connection.close();
+      process.exit(0);
+    }
+  })();
 }
