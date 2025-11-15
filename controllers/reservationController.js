@@ -999,23 +999,6 @@ exports.updateReservationStatus = async (req, res) => {
             { new: true }
         );
 
-        // Tạo Conversation nếu completed
-        if (status === 'completed') {
-          const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
-          if (!existingConv) {
-            const conv = new Conversation({
-              threadId: `T-${updatedReservation._id}`,
-              hotel: updatedReservation.hotel,
-              customer: updatedReservation.customer,
-              reservation: updatedReservation._id,
-              lastMessageAt: new Date(),
-              unread: 0,
-              pinned: false
-            });
-            await conv.save();
-          }
-        }
-
         return res.status(200).json({
             message: `Reservation status updated to ${status}.`,
             reservation: updatedReservation,
