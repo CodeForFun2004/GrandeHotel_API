@@ -586,19 +586,55 @@ exports.getRoomById = async (req, res) => {
         if (!room) {
             return res.status(404).json({ message: 'Room not found' });
         }
-                // If request is authenticated (manager/staff), ensure the requested room belongs to their hotel
-                try {
-                    const userHotelId = req.user?.hotelId || req.user?.storeId;
-                    if (userHotelId && room.hotel) {
-                        const roomHotelId = (room.hotel._id || room.hotel).toString();
-                        if (roomHotelId !== userHotelId.toString()) {
-                            return res.status(403).json({ message: 'Access denied to this room' });
-                        }
-                    }
-                } catch (e) {
-                    // ignore and continue for public access
+
+        // If request is authenticated (manager/staff), ensure the requested room belongs to their hotel
+        try {
+            const userHotelId = req.user?.hotelId || req.user?.storeId;
+            if (userHotelId && room.hotel) {
+                const roomHotelId = (room.hotel._id || room.hotel).toString();
+                if (roomHotelId !== userHotelId.toString()) {
+                    return res.status(403).json({ message: 'Access denied to this room' });
                 }
-        res.status(200).json(room);
+            }
+        } catch (e) {
+            // ignore and continue for public access
+        }
+
+        // Attach reservations (bookings) that reference this room so frontend can display booked ranges.
+        // Find ReservationDetail entries that include this room in reservedRooms
+        let bookings = [];
+        try {
+            const details = await ReservationDetail.find({ reservedRooms: roomId }).select('reservation').lean();
+            const reservationIds = details.map(d => d.reservation).filter(Boolean);
+
+            if (reservationIds.length > 0) {
+                // Only return reservations belonging to the same hotel as the room and with active booking-like statuses
+                const hotelId = room.hotel ? (room.hotel._id || room.hotel) : null;
+                const query = { _id: { $in: reservationIds } };
+                if (hotelId) query.hotel = hotelId;
+                query.status = { $in: ['pending', 'approved', 'paid'] };
+
+                bookings = await Reservation.find(query)
+                    .populate('customer', 'fullname username email phone')
+                    .populate('payment')
+                    .populate({
+                        path: 'details',
+                        populate: [
+                            { path: 'roomType', select: 'name basePrice' },
+                            { path: 'reservedRooms', model: 'Room', select: 'roomNumber code status' }
+                        ]
+                    })
+                    .sort({ checkInDate: 1 })
+                    .lean();
+            }
+        } catch (attachErr) {
+            console.warn('Failed to attach bookings to room response', attachErr);
+        }
+
+        const roomObj = room.toObject();
+        roomObj.bookings = bookings; // frontend expects `bookings` or similar
+
+        res.status(200).json(roomObj);
     } catch (error) {
         res.status(400).json({ message: error.message });
     }

@@ -801,16 +801,22 @@ exports.getAllReservations = async (req, res) => {
 exports.getReservationById = async (req, res) => {
     try {
         const reservationId = req.params.id;
+        // Populate reservation with related data: payment, customer, and details.
+        // Also populate each ReservationDetail.reservedRooms as Room documents so frontend
+        // can directly inspect reserved room ids/numbers/status without extra calls.
         const reservation = await Reservation.findById(reservationId)
             .populate('hotel', 'name address description')
             .populate('customer', 'fullname username email phone address')
             .populate('payment') // Populate payment thông tin
             .populate({
                 path: 'details',
-                populate: { 
-                    path: 'roomType',
-                    select: 'name basePrice description amenities'
-                },
+                populate: [
+                    { path: 'roomType', select: 'name basePrice description amenities' },
+                    // populate reservedRooms as Room docs and include their roomType and hotel refs
+                    { path: 'reservedRooms', model: 'Room', select: 'roomNumber code status roomType hotel', populate: [{ path: 'roomType', select: 'name' }, { path: 'hotel', select: 'name address' }] },
+                    // populate services[].service for detailed service info
+                    { path: 'services.service', model: 'Service', select: 'name basePrice description' }
+                ],
             });
 
         if (!reservation) {
