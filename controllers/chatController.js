@@ -12,24 +12,13 @@ const setSocketIO = (socketIO) => {
 
 module.exports.setSocketIO = setSocketIO;
 
-// Generic emit helper so other controllers can notify clients
-const emit = (event, payload) => {
-  try {
-    if (io) io.emit(event, payload);
-  } catch (e) {
-    console.error('chatController.emit error', e);
-  }
-};
 
-module.exports.emit = emit;
+// Helper: Kiểm tra reservation có thể chat
+// Chat sẽ được phép từ khi approve cho tới khi checkout, không phụ thuộc vào check-in/check-out date
 
-// Helper: Kiểm tra reservation active
 const isReservationActive = (reservation) => {
-  const now = new Date();
   return reservation &&
-         ['approved', 'completed'].includes(reservation.status) &&
-         now >= reservation.checkInDate &&
-         now <= reservation.checkOutDate;
+         ['approved', 'completed'].includes(reservation.status);
 };
 
 // GET /api/staff/conversations - Lấy danh sách conversations
@@ -48,21 +37,16 @@ const getConversations = async (req, res) => {
       filter.unread = { $gt: 0 };
     } else if (tab === 'active') {
       // For active tab, get conversations with approved/completed reservations
-      const now = new Date();
+      // Chat is available from approval onwards, not restricted by check-in/check-out dates
       const activeReservations = await Reservation.find({
         hotel: hotelId,
-        status: { $in: ['approved', 'completed'] },
-        checkInDate: { $lte: now },
-        checkOutDate: { $gte: now }
+        status: { $in: ['approved', 'completed'] }
       }).select('_id');
       const activeReservationIds = activeReservations.map(r => r._id);
 
       filter = {
         hotel: hotelId,
-        $or: [
-          { reservation: { $in: activeReservationIds } },
-          { reservation: null }
-        ]
+        reservation: { $in: activeReservationIds }
       };
     }
 
@@ -211,14 +195,13 @@ const sendMessage = async (req, res) => {
       });
       await conversation.save();
     } else {
-    // Kiểm tra reservation confirmed (chỉ kiểm tra nếu có reservation)
-    // Allow customers to send messages for approved/completed reservations
-    if (conversation.reservation) {
-      const reservation = await Reservation.findById(conversation.reservation);
-      if (!['approved', 'completed'].includes(reservation.status)) {
-        return res.status(403).json({ message: 'Cannot send message: reservation not confirmed' });
+      // Kiểm tra reservation active (chỉ kiểm tra nếu có reservation)
+      if (conversation.reservation) {
+        const reservation = await Reservation.findById(conversation.reservation);
+        if (!isReservationActive(reservation)) {
+          return res.status(403).json({ message: 'Cannot send message: reservation not active' });
+        }
       }
-    }
     }
 
     const message = new Message({
@@ -312,12 +295,11 @@ const sendMessageFromCustomer = async (req, res) => {
       return res.status(404).json({ message: 'Conversation not found' });
     }
 
-    // Kiểm tra reservation confirmed (chỉ kiểm tra nếu có reservation)
-    // Allow customers to send messages for approved/completed reservations
+    // Kiểm tra reservation active (chỉ kiểm tra nếu có reservation)
     if (conversation.reservation) {
       const reservation = await Reservation.findById(conversation.reservation);
-      if (!['approved', 'completed'].includes(reservation.status)) {
-        return res.status(403).json({ message: 'Cannot send message: reservation not confirmed' });
+      if (!isReservationActive(reservation)) {
+        return res.status(403).json({ message: 'Cannot send message: reservation not active' });
       }
     }
 
@@ -390,6 +372,7 @@ const getCustomerConversations = async (req, res) => {
       filter.unread = { $gt: 0 };
     } else if (tab === 'active') {
       // For active tab, get conversations with approved/completed reservations
+      // Chat is available from approval onwards, not restricted by check-in/check-out dates
       const confirmedReservations = await Reservation.find({
         customer: customerId,
         status: { $in: ['approved', 'completed'] }
@@ -398,10 +381,7 @@ const getCustomerConversations = async (req, res) => {
 
       filter = {
         customer: customerId,
-        $or: [
-          { reservation: { $in: confirmedReservationIds } },
-          { reservation: null }
-        ]
+        reservation: { $in: confirmedReservationIds }
       };
     }
 
@@ -466,9 +446,9 @@ const getCustomerConversation = async (req, res) => {
       return res.status(404).json({ message: 'Conversation not found' });
     }
 
-    // Kiểm tra reservation active (chỉ kiểm tra nếu có reservation)
-    if (conversation.reservation && !isReservationActive(conversation.reservation)) {
-      return res.status(403).json({ message: 'Conversation not active' });
+    // Kiểm tra conversation có reservation và reservation phải active
+    if (!conversation.reservation || !isReservationActive(conversation.reservation)) {
+      return res.status(403).json({ message: 'Conversation not available' });
     }
 
     const messages = await Message.find({ conversation: conversation._id }).sort({ time: 1 });
