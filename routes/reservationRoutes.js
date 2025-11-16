@@ -3,13 +3,15 @@ const router = express.Router();
 
 
 const reservationController = require('../controllers/reservationController');
-const { protect } = require('../middlewares/auth.middleware');
+const { protect, isAdmin } = require('../middlewares/auth.middleware');
 
 
 // Minimal reservation creation: selects room types and quantities only (requires auth)
 router.post('/', protect, reservationController.createReservation);
 
+// Secured routes (require authentication)
 router.get('/', reservationController.getAllReservations);
+router.get('/user/:userId', protect, isAdmin, reservationController.getReservationsByUser);
 // Get all reservations for the current authenticated user (must be before /:id route)
 router.get('/me', protect, reservationController.getUserReservations);
 // Approve or cancel reservation with reason (PUT /:id/approve with body: { action: 'approve'|'cancel', reason?: 'string' })

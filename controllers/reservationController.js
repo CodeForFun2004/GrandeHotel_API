@@ -1120,11 +1120,40 @@ exports.updateReservationStatus = async (req, res) => {
     }
 };
 
-// [7] XÓA ĐƠN ĐẶT PHÒNG (Chỉ nên cho phép với trạng thái nhất định hoặc Admin)
+// [8] LẤY DANH SÁCH ĐƠN ĐẶT PHÒNG CỦA MỘT USER (THEO CUSTOMER ID)
+exports.getReservationsByUser = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+
+        const reservations = await Reservation.find({ customer: userId })
+            .populate('hotel', 'name address')
+            .populate('customer', 'fullname username email phone')
+            .populate('payment') // Populate payment thông tin
+            .populate({
+                path: 'details',
+                populate: {
+                    path: 'roomType',
+                    select: 'name basePrice'
+                },
+            })
+            .sort({ createdAt: -1 }); // most recent first
+
+        return res.status(200).json({
+            message: 'Reservations retrieved successfully.',
+            reservations,
+        });
+
+    } catch (error) {
+        console.error('Error retrieving reservations:', error);
+        res.status(500).json({ message: 'Internal server error.', error: error.message });
+    }
+};
+
+// [9] XÓA ĐƠN ĐẶT PHÒNG (Chỉ nên cho phép với trạng thái nhất định hoặc Admin)
 exports.deleteReservation = async (req, res) => {
     try {
         const reservationId = req.params.id;
-        
+
         // Cần kiểm tra xem có ReservationDetail nào liên quan không, nếu có thì xóa cả detail
         await ReservationDetail.deleteMany({ reservation: reservationId });
 
