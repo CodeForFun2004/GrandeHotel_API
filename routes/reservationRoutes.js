@@ -3,13 +3,15 @@ const router = express.Router();
 
 
 const reservationController = require('../controllers/reservationController');
-const { protect } = require('../middlewares/auth.middleware');
+const { protect, isAdmin } = require('../middlewares/auth.middleware');
 
 
 // Minimal reservation creation: selects room types and quantities only (requires auth)
 router.post('/', protect, reservationController.createReservation);
 
+// Secured routes (require authentication)
 router.get('/', reservationController.getAllReservations);
+router.get('/user/:userId', protect, isAdmin, reservationController.getReservationsByUser);
 // Approve or cancel reservation with reason (PUT /:id/approve with body: { action: 'approve'|'cancel', reason?: 'string' })
 router.put('/:id/approve', reservationController.approveReservation);
 // Select payment option and generate QR code (POST /:id/payment-options with body: { paymentType: 'full'|'deposit' })

@@ -11,11 +11,8 @@ module.exports.activeUsers = activeUsers;
 
 // Helper: Check if reservation is active
 const isReservationActive = (reservation) => {
-  const now = new Date();
   return reservation &&
-         ['approved', 'completed'].includes(reservation.status) &&
-         now >= reservation.checkInDate &&
-         now <= reservation.checkOutDate;
+         ['approved', 'completed'].includes(reservation.status);
 };
 
 // Socket event handlers
@@ -28,7 +25,7 @@ const handleSocketConnection = (io) => {
     socketToUser.set(socket.id, socket.user.id.toString());
 
     // Monitor connection health (heartbeat happens automatically)
-    console.log(`💓 Heartbeat active for ${socket.user.email}: ping every 25s, timeout 60s`);
+    // console.log(`💓 Heartbeat active for ${socket.user.email}: ping every 25s, timeout 60s`);
 
     // Join user-specific room for notifications
     socket.join(`user_${socket.user.id}`);
