@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const roomController = require('../controllers/roomController');
+const roomActivityController = require('../controllers/roomActivityController');
 
 const { protect, isAdmin, isHotelManager, isStaff } = require('../middlewares/auth.middleware');
 
@@ -20,11 +21,29 @@ router.get('/all', roomController.getAdminRooms);
 // Public room detail: allow UI to fetch a single room without requiring manager role
 router.get('/public/:id', roomController.getRoomById);
 
+// Room activity endpoints
+router.get('/:id/activities', protect, (req, res, next) => {
+  // allow staff or managers to view activities
+  next();
+}, roomActivityController.getActivities);
+
+router.post('/:id/activities', protect, roomActivityController.addActivity);
+
 // Room Management Routes (for hotel managers - check permissions)
 router.get('/', protect, isHotelManager, roomController.getAllRooms);
-router.get('/:id', protect, isHotelManager, roomController.getRoomById);
+// Allow hotel managers and staff to view a specific room (staff can view their hotel's rooms)
+router.get('/:id', protect, (req, res, next) => {
+  const role = req.user?.role;
+  if (role === 'hotel-manager' || role === 'staff' || role === 'admin') return next();
+  return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho hotel-manager hoặc staff' });
+}, roomController.getRoomById);
 router.post('/', protect, isHotelManager, roomController.createRoom);
-router.put('/:id', protect, isHotelManager, roomController.updateRoom);
+// Allow hotel managers full update; allow staff but controller will enforce staff-only status updates
+router.put('/:id', protect, (req, res, next) => {
+  const role = req.user?.role;
+  if (role === 'hotel-manager' || role === 'staff' || role === 'admin') return next();
+  return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho hotel-manager hoặc staff' });
+}, roomController.updateRoom);
 router.delete('/:id', protect, isHotelManager, roomController.deleteRoom);
 
 // Legacy Routes (kept for compatibility)

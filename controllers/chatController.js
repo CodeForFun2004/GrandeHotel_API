@@ -12,6 +12,17 @@ const setSocketIO = (socketIO) => {
 
 module.exports.setSocketIO = setSocketIO;
 
+// Generic emit helper so other controllers can notify clients
+const emit = (event, payload) => {
+  try {
+    if (io) io.emit(event, payload);
+  } catch (e) {
+    console.error('chatController.emit error', e);
+  }
+};
+
+module.exports.emit = emit;
+
 // Helper: Kiểm tra reservation active
 const isReservationActive = (reservation) => {
   const now = new Date();
