@@ -12,8 +12,10 @@ const setSocketIO = (socketIO) => {
 
 module.exports.setSocketIO = setSocketIO;
 
+
 // Helper: Kiểm tra reservation có thể chat
 // Chat sẽ được phép từ khi approve cho tới khi checkout, không phụ thuộc vào check-in/check-out date
+
 const isReservationActive = (reservation) => {
   return reservation &&
          ['approved', 'completed'].includes(reservation.status);

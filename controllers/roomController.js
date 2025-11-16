@@ -1,6 +1,8 @@
 const RoomType = require('../models/roomTypeModel');
 const Hotel = require('../models/hotelModel');
 const Room = require('../models/roomModel');
+const RoomActivity = require('../models/roomActivity');
+const chatController = require('./chatController');
 const ReservationDetail = require('../models/reservationDetailModel');
 const Reservation = require('../models/reservationModel');
 const mongoose = require('mongoose');
@@ -584,7 +586,55 @@ exports.getRoomById = async (req, res) => {
         if (!room) {
             return res.status(404).json({ message: 'Room not found' });
         }
-        res.status(200).json(room);
+
+        // If request is authenticated (manager/staff), ensure the requested room belongs to their hotel
+        try {
+            const userHotelId = req.user?.hotelId || req.user?.storeId;
+            if (userHotelId && room.hotel) {
+                const roomHotelId = (room.hotel._id || room.hotel).toString();
+                if (roomHotelId !== userHotelId.toString()) {
+                    return res.status(403).json({ message: 'Access denied to this room' });
+                }
+            }
+        } catch (e) {
+            // ignore and continue for public access
+        }
+
+        // Attach reservations (bookings) that reference this room so frontend can display booked ranges.
+        // Find ReservationDetail entries that include this room in reservedRooms
+        let bookings = [];
+        try {
+            const details = await ReservationDetail.find({ reservedRooms: roomId }).select('reservation').lean();
+            const reservationIds = details.map(d => d.reservation).filter(Boolean);
+
+            if (reservationIds.length > 0) {
+                // Only return reservations belonging to the same hotel as the room and with active booking-like statuses
+                const hotelId = room.hotel ? (room.hotel._id || room.hotel) : null;
+                const query = { _id: { $in: reservationIds } };
+                if (hotelId) query.hotel = hotelId;
+                query.status = { $in: ['pending', 'approved', 'paid'] };
+
+                bookings = await Reservation.find(query)
+                    .populate('customer', 'fullname username email phone')
+                    .populate('payment')
+                    .populate({
+                        path: 'details',
+                        populate: [
+                            { path: 'roomType', select: 'name basePrice' },
+                            { path: 'reservedRooms', model: 'Room', select: 'roomNumber code status' }
+                        ]
+                    })
+                    .sort({ checkInDate: 1 })
+                    .lean();
+            }
+        } catch (attachErr) {
+            console.warn('Failed to attach bookings to room response', attachErr);
+        }
+
+        const roomObj = room.toObject();
+        roomObj.bookings = bookings; // frontend expects `bookings` or similar
+
+        res.status(200).json(roomObj);
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
@@ -592,7 +642,49 @@ exports.getRoomById = async (req, res) => {
 exports.updateRoom = async (req, res) => {
     const roomId = req.params.id;
     try {
-        const room = await Room.findByIdAndUpdate(roomId, req.body, { new: true });
+        // Load current room to detect changes
+        const current = await Room.findById(roomId);
+        if (!current) return res.status(404).json({ message: 'Room not found' });
+                // Ensure manager/staff can only update rooms of their hotel
+                try {
+                    const userHotelId = req.user?.hotelId || req.user?.storeId;
+                    if (userHotelId && current.hotel && current.hotel.toString() !== userHotelId.toString()) {
+                        return res.status(403).json({ message: 'Access denied to update this room' });
+                    }
+                } catch (e) {}
+
+        // If the requester is a staff member, restrict fields to status only
+        try {
+            if (req.user && req.user.role === 'staff') {
+                const allowed = ['status'];
+                const incoming = Object.keys(req.body || {});
+                const forbidden = incoming.filter(k => !allowed.includes(k));
+                if (forbidden.length > 0) {
+                    return res.status(403).json({ message: 'Staff chỉ được phép cập nhật trạng thái phòng' });
+                }
+            }
+        } catch (e) {}
+
+        const updated = await Room.findByIdAndUpdate(roomId, req.body, { new: true });
+        // If status changed, create activity and emit
+        if (req.body.status && req.body.status !== current.status) {
+            try {
+                const activity = await RoomActivity.create({
+                    room: roomId,
+                    user: req.user?._id,
+                    type: 'status_change',
+                    message: `Trạng thái: ${current.status} → ${req.body.status}`,
+                    meta: { from: current.status, to: req.body.status },
+                    ip: req.ip,
+                    userAgent: req.headers['user-agent']
+                });
+                // emit event
+                chatController.emit && chatController.emit('room_activity', { room: roomId, activity });
+            } catch (e) {
+                console.error('Failed to create room activity', e);
+            }
+        }
+        const room = updated;
         if (!room) {
             return res.status(404).json({ message: 'Room not found' });
         }
@@ -605,10 +697,16 @@ exports.updateRoom = async (req, res) => {
 exports.deleteRoom = async (req, res) => {
     const roomId = req.params.id;
     try {
-        const room = await Room.findByIdAndDelete(roomId);
-        if (!room) {
-            return res.status(404).json({ message: 'Room not found' });
-        }
+                // Ensure manager/staff can only delete rooms of their hotel
+                const room = await Room.findById(roomId);
+                if (!room) return res.status(404).json({ message: 'Room not found' });
+                try {
+                    const userHotelId = req.user?.hotelId || req.user?.storeId;
+                    if (userHotelId && room.hotel && room.hotel.toString() !== userHotelId.toString()) {
+                        return res.status(403).json({ message: 'Access denied to delete this room' });
+                    }
+                } catch (e) {}
+                await Room.findByIdAndDelete(roomId);
         res.status(200).json({ message: 'Room deleted successfully' });
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -810,6 +908,15 @@ exports.updateAdminRoom = async (req, res) => {
             }
         }
 
+                // detect previous status
+                const current = await Room.findById(roomId);
+                // ensure admin/manager updates are hotel-scoped (if user has hotelId)
+                try {
+                    const userHotelId = req.user?.hotelId || req.user?.storeId;
+                    if (userHotelId && current && current.hotel && current.hotel.toString() !== userHotelId.toString()) {
+                        return res.status(403).json({ message: 'Access denied to update this room' });
+                    }
+                } catch (e) {}
         const room = await Room.findByIdAndUpdate(
             roomId,
             {
@@ -822,6 +929,23 @@ exports.updateAdminRoom = async (req, res) => {
             },
             { new: true }
         ).populate('roomType').populate('hotel');
+
+        if (current && status && status !== current.status) {
+            try {
+                const activity = await RoomActivity.create({
+                    room: roomId,
+                    user: req.user?._id,
+                    type: 'status_change',
+                    message: `Trạng thái: ${current.status} → ${status}`,
+                    meta: { from: current.status, to: status },
+                    ip: req.ip,
+                    userAgent: req.headers['user-agent']
+                });
+                chatController.emit && chatController.emit('room_activity', { room: roomId, activity });
+            } catch (e) {
+                console.error('Failed to create room activity', e);
+            }
+        }
 
         if (!room) {
             return res.status(404).json({ message: 'Room not found' });
