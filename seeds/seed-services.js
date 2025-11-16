@@ -1,13 +1,21 @@
+const mongoose = require('mongoose');
+const connectDB = require('../config/database');
 const Service = require('../models/serviceModel');
+const Hotel = require('../models/hotelModel');
 
-module.exports = async function seedServices(hotels = []) {
-  // Sample services to add to each hotel
+module.exports = async function seedServices(hotels = null) {
+  // Auto-fetch hotels if not supplied for standalone execution
+  if (!hotels) hotels = await Hotel.find({});
+
+  // VND-based service pricing
   const baseServices = [
-    { name: 'Breakfast Buffet', description: 'All-you-can-eat breakfast buffet', basePrice: 10 },
-    { name: 'Airport Pickup', description: 'Private transfer from airport to hotel', basePrice: 25 },
-    { name: 'Room Cleaning', description: 'Daily room cleaning service', basePrice: 5 },
-    { name: 'Spa Access', description: 'Complimentary access to hotel spa facilities', basePrice: 20 },
-    { name: 'Extra Bed', description: 'Rollaway extra bed for an additional guest', basePrice: 15 }
+    { name: 'Breakfast Buffet', description: 'All-you-can-eat breakfast buffet', basePrice: 150000 },
+    { name: 'Airport Pickup', description: 'Private transfer from airport to hotel', basePrice: 400000 },
+    { name: 'Room Cleaning', description: 'Daily room cleaning service', basePrice: 70000 },
+    { name: 'Spa Access', description: 'Access to hotel spa facilities', basePrice: 350000 },
+    { name: 'Extra Bed', description: 'Rollaway extra bed for an additional guest', basePrice: 200000 },
+    { name: 'Laundry Service', description: 'Per load laundry service', basePrice: 80000 },
+    { name: 'Mini-Bar Refill', description: 'Restock mini-bar items', basePrice: 120000 },
   ];
 
   await Service.deleteMany({});
@@ -20,6 +28,21 @@ module.exports = async function seedServices(hotels = []) {
   }
 
   const inserted = await Service.insertMany(docs);
-  console.log(`🛎️  Seeded ${inserted.length} services`);
+  console.log(`🛎️  Seeded ${inserted.length} services (VND)`);
   return inserted;
 };
+
+// Allow running individually
+if (require.main === module) {
+  (async () => {
+    try {
+      await connectDB();
+      await module.exports();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      await mongoose.connection.close();
+      process.exit(0);
+    }
+  })();
+}

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const roomController = require('../controllers/roomController');
 
-const { protect, isAdmin, isHotelManager } = require('../middlewares/auth.middleware');
+const { protect, isAdmin, isHotelManager, isStaff } = require('../middlewares/auth.middleware');
 
 // Room Type Management Routes - global/shared (require auth, but for any user)
 router.get('/types', protect, roomController.getAllRoomTypes); // Any authenticated user can see room types
@@ -10,6 +10,12 @@ router.get('/types/:id', protect, roomController.getRoomTypeById);
 router.post('/types', protect, isHotelManager, roomController.createRoomType); // Only managers can modify
 router.put('/types/:id', protect, isHotelManager, roomController.updateRoomType);
 router.delete('/types/:id', protect, isHotelManager, roomController.deleteRoomType);
+
+// Staff view: list rooms in their assigned hotel (must be placed BEFORE '/:id')
+router.get('/staff', protect, isStaff, roomController.getRoomsForStaff);
+
+// Public: list ALL rooms across hotels (no auth)
+router.get('/all', roomController.getAdminRooms);
 
 // Room Management Routes (for hotel managers - check permissions)
 router.get('/', protect, isHotelManager, roomController.getAllRooms);

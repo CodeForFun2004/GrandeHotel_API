@@ -1,3 +1,5 @@
+const mongoose = require('mongoose');
+const connectDB = require('../config/database');
 const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const Payment = require('../models/paymentModel');
@@ -90,4 +92,18 @@ module.exports = async function seedReservations() {
 
   console.log(`🧾 Seeded ${detailsAll.length} reservation details & ${paymentsAll.length} payments`);
   return { reservations, details: detailsAll, payments: paymentsAll };
+}
+// Allow running individually
+if (require.main === module) {
+  (async () => {
+    try {
+      await connectDB();
+      await module.exports();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      await mongoose.connection.close();
+      process.exit(0);
+    }
+  })();
 }
