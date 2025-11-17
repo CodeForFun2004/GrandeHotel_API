@@ -797,6 +797,116 @@ exports.getAllReservations = async (req, res) => {
     }
 };
 
+// [4.5] XEM TẤT CẢ ĐƠN ĐẶT PHÒNG CỦA USER HIỆN TẠI (VỚI FILTER)
+exports.getUserReservations = async (req, res) => {
+    try {
+        // Lấy user từ token (đã được authenticate bởi protect middleware)
+        const userId = req.user._id;
+        
+        if (!userId) {
+            return res.status(401).json({ message: 'User not authenticated.' });
+        }
+
+        // Lấy query parameters cho filter
+        const { stayStatus, dateFrom, dateTo, hotelName } = req.query;
+
+        // Xây dựng query filter
+        const filter = { customer: userId };
+
+        // Filter theo stayStatus
+        if (stayStatus && stayStatus !== 'all') {
+            filter.stayStatus = stayStatus;
+        }
+
+        // Filter theo ngày (checkInDate hoặc checkOutDate)
+        if (dateFrom || dateTo) {
+            filter.$or = [];
+            
+            if (dateFrom && dateTo) {
+                // Tìm reservations có checkInDate hoặc checkOutDate nằm trong khoảng
+                const fromDate = new Date(dateFrom);
+                const toDate = new Date(dateTo);
+                toDate.setHours(23, 59, 59, 999); // Set đến cuối ngày
+                
+                filter.$or.push(
+                    {
+                        checkInDate: { $gte: fromDate, $lte: toDate }
+                    },
+                    {
+                        checkOutDate: { $gte: fromDate, $lte: toDate }
+                    },
+                    {
+                        $and: [
+                            { checkInDate: { $lte: fromDate } },
+                            { checkOutDate: { $gte: toDate } }
+                        ]
+                    }
+                );
+            } else if (dateFrom) {
+                const fromDate = new Date(dateFrom);
+                filter.$or.push(
+                    { checkInDate: { $gte: fromDate } },
+                    { checkOutDate: { $gte: fromDate } }
+                );
+            } else if (dateTo) {
+                const toDate = new Date(dateTo);
+                toDate.setHours(23, 59, 59, 999);
+                filter.$or.push(
+                    { checkInDate: { $lte: toDate } },
+                    { checkOutDate: { $lte: toDate } }
+                );
+            }
+        }
+
+        // Tìm tất cả reservations của user này với filter
+        let query = Reservation.find(filter)
+            .populate('hotel', 'name address city country email phone images')
+            .populate('customer', 'fullname username email phone')
+            .populate('payment')
+            .populate({
+                path: 'details',
+                populate: [
+                    {
+                        path: 'roomType',
+                        select: 'name basePrice description amenities images'
+                    },
+                    {
+                        path: 'services.service',
+                        select: 'name basePrice description'
+                    },
+                    {
+                        path: 'reservedRooms',
+                        select: 'roomNumber floor status'
+                    }
+                ]
+            })
+            .sort({ createdAt: -1 });
+
+        const reservations = await query.exec();
+
+        // Filter theo tên hotel (client-side vì đã populate)
+        let filteredReservations = reservations;
+        if (hotelName && hotelName.trim()) {
+            const searchTerm = hotelName.trim().toLowerCase();
+            filteredReservations = reservations.filter(reservation => {
+                const hotel = reservation.hotel;
+                if (!hotel || typeof hotel !== 'object') return false;
+                const hotelNameStr = hotel.name || '';
+                return hotelNameStr.toLowerCase().includes(searchTerm);
+            });
+        }
+
+        return res.status(200).json({
+            message: 'User reservations retrieved successfully.',
+            reservations: filteredReservations,
+        });
+
+    } catch (error) {
+        console.error('Error retrieving user reservations:', error);
+        res.status(500).json({ message: 'Internal server error.', error: error.message });
+    }
+};
+
 // [5] XEM CHI TIẾT ĐƠN ĐẶT PHÒNG (GIỮ NGUYÊN)
 exports.getReservationById = async (req, res) => {
     try {
@@ -1005,23 +1115,6 @@ exports.updateReservationStatus = async (req, res) => {
             { new: true }
         );
 
-        // Tạo Conversation nếu completed
-        if (status === 'completed') {
-          const existingConv = await Conversation.findOne({ reservation: updatedReservation._id });
-          if (!existingConv) {
-            const conv = new Conversation({
-              threadId: `T-${updatedReservation._id}`,
-              hotel: updatedReservation.hotel,
-              customer: updatedReservation.customer,
-              reservation: updatedReservation._id,
-              lastMessageAt: new Date(),
-              unread: 0,
-              pinned: false
-            });
-            await conv.save();
-          }
-        }
-
         return res.status(200).json({
             message: `Reservation status updated to ${status}.`,
             reservation: updatedReservation,
@@ -1033,11 +1126,40 @@ exports.updateReservationStatus = async (req, res) => {
     }
 };
 
-// [7] XÓA ĐƠN ĐẶT PHÒNG (Chỉ nên cho phép với trạng thái nhất định hoặc Admin)
+// [8] LẤY DANH SÁCH ĐƠN ĐẶT PHÒNG CỦA MỘT USER (THEO CUSTOMER ID)
+exports.getReservationsByUser = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+
+        const reservations = await Reservation.find({ customer: userId })
+            .populate('hotel', 'name address')
+            .populate('customer', 'fullname username email phone')
+            .populate('payment') // Populate payment thông tin
+            .populate({
+                path: 'details',
+                populate: {
+                    path: 'roomType',
+                    select: 'name basePrice'
+                },
+            })
+            .sort({ createdAt: -1 }); // most recent first
+
+        return res.status(200).json({
+            message: 'Reservations retrieved successfully.',
+            reservations,
+        });
+
+    } catch (error) {
+        console.error('Error retrieving reservations:', error);
+        res.status(500).json({ message: 'Internal server error.', error: error.message });
+    }
+};
+
+// [9] XÓA ĐƠN ĐẶT PHÒNG (Chỉ nên cho phép với trạng thái nhất định hoặc Admin)
 exports.deleteReservation = async (req, res) => {
     try {
         const reservationId = req.params.id;
-        
+
         // Cần kiểm tra xem có ReservationDetail nào liên quan không, nếu có thì xóa cả detail
         await ReservationDetail.deleteMany({ reservation: reservationId });
 
