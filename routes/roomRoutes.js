@@ -4,6 +4,11 @@ const roomController = require('../controllers/roomController');
 const roomActivityController = require('../controllers/roomActivityController');
 
 const { protect, isAdmin, isHotelManager, isStaff } = require('../middlewares/auth.middleware');
+const upload = require('../middlewares/upload.middleware');
+const Room = require('../models/roomModel');
+
+// Upload middleware for room images
+const uploadRoomImage = upload({ folderPrefix: 'grand-hotel/rooms', model: Room, nameField: 'code' });
 
 // Room Type Management Routes - global/shared (require auth, but for any user)
 router.get('/types', protect, roomController.getAllRoomTypes); // Any authenticated user can see room types
@@ -44,6 +49,12 @@ router.put('/:id', protect, (req, res, next) => {
   if (role === 'hotel-manager' || role === 'staff' || role === 'admin') return next();
   return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho hotel-manager hoặc staff' });
 }, roomController.updateRoom);
+// upload a single image for room (manager only)
+router.put('/:id/images', protect, isHotelManager, uploadRoomImage.single('image'), roomController.addRoomImage);
+// upload multiple images for room in one request (manager only)
+router.put('/:id/images/batch', protect, isHotelManager, uploadRoomImage.array('images', 10), roomController.addRoomImages);
+// delete a single image (manager only)
+router.delete('/:id/images', protect, isHotelManager, roomController.deleteRoomImage);
 router.delete('/:id', protect, isHotelManager, roomController.deleteRoom);
 
 // Legacy Routes (kept for compatibility)

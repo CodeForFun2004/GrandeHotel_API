@@ -694,6 +694,180 @@ exports.updateRoom = async (req, res) => {
     }
 };
 
+// @desc    Upload a single image for a room (Cloudinary via multer storage)
+// @route   PUT /api/rooms/:id/images
+// @access  Private (hotel manager)
+exports.addRoomImage = async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        const room = await Room.findById(roomId);
+        if (!room) return res.status(404).json({ message: 'Room not found' });
+
+        // Ensure manager/staff can only update rooms of their hotel
+        try {
+            const userHotelId = req.user?.hotelId || req.user?.storeId;
+            if (userHotelId && room.hotel && room.hotel.toString() !== userHotelId.toString()) {
+                return res.status(403).json({ message: 'Access denied to update this room' });
+            }
+        } catch (e) {}
+
+        // Expect multer middleware to have populated req.file.path with Cloudinary URL
+        if (!req.file || !req.file.path) {
+            return res.status(400).json({ message: 'No image file uploaded' });
+        }
+
+        // Append new image URL
+        const imageUrl = req.file.path;
+        room.images = room.images || [];
+        room.images.push(imageUrl);
+        await room.save();
+
+        // Create activity
+        try {
+            const activity = await RoomActivity.create({
+                room: roomId,
+                user: req.user?._id,
+                type: 'image_upload',
+                message: `Upload ảnh cho phòng: ${imageUrl}`,
+                meta: { image: imageUrl },
+                ip: req.ip,
+                userAgent: req.headers['user-agent']
+            });
+            chatController.emit && chatController.emit('room_activity', { room: roomId, activity });
+        } catch (e) {
+            console.error('Failed to create room activity for image upload', e);
+        }
+
+        const populated = await Room.findById(roomId).populate('roomType').populate('hotel');
+        res.status(200).json({ message: 'Image uploaded', data: populated });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+// @desc    Upload multiple images for a room (Cloudinary via multer storage)
+// @route   PUT /api/rooms/:id/images/batch
+// @access  Private (hotel manager)
+exports.addRoomImages = async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        const room = await Room.findById(roomId);
+        if (!room) return res.status(404).json({ message: 'Room not found' });
+
+        // Ensure manager/staff can only update rooms of their hotel
+        try {
+            const userHotelId = req.user?.hotelId || req.user?.storeId;
+            if (userHotelId && room.hotel && room.hotel.toString() !== userHotelId.toString()) {
+                return res.status(403).json({ message: 'Access denied to update this room' });
+            }
+        } catch (e) {}
+
+        if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+            return res.status(400).json({ message: 'No image files uploaded' });
+        }
+
+        const uploadedUrls = req.files.map(f => f.path).filter(Boolean);
+        room.images = room.images || [];
+        // Append all uploaded urls
+        room.images.push(...uploadedUrls);
+        // Deduplicate just in case
+        room.images = Array.from(new Set(room.images));
+        await room.save();
+
+        // Create a single activity summarizing batch upload
+        try {
+            const activity = await RoomActivity.create({
+                room: roomId,
+                user: req.user?._id,
+                type: 'image_upload',
+                message: `Upload ${uploadedUrls.length} ảnh cho phòng`,
+                meta: { images: uploadedUrls },
+                ip: req.ip,
+                userAgent: req.headers['user-agent']
+            });
+            chatController.emit && chatController.emit('room_activity', { room: roomId, activity });
+        } catch (e) {
+            console.error('Failed to create room activity for image upload', e);
+        }
+
+        const populated = await Room.findById(roomId).populate('roomType').populate('hotel');
+        res.status(200).json({ message: 'Images uploaded', data: populated });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+// @desc    Delete a single image for a room (Cloudinary + DB)
+// @route   DELETE /api/rooms/:id/images
+// @access  Private (hotel manager)
+exports.deleteRoomImage = async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        const { image } = req.body || {};
+        if (!image) return res.status(400).json({ message: 'Missing image url to delete' });
+
+        const room = await Room.findById(roomId);
+        if (!room) return res.status(404).json({ message: 'Room not found' });
+
+        // Ensure manager can only operate within their hotel
+        try {
+            const userHotelId = req.user?.hotelId || req.user?.storeId;
+            if (userHotelId && room.hotel && room.hotel.toString() !== userHotelId.toString()) {
+                return res.status(403).json({ message: 'Access denied to update this room' });
+            }
+        } catch (e) {}
+
+        room.images = room.images || [];
+        const idx = room.images.findIndex((u) => u === image);
+        if (idx === -1) return res.status(404).json({ message: 'Image not found on this room' });
+
+        // Remove from array
+        room.images.splice(idx, 1);
+        await room.save();
+
+        // Try to delete from Cloudinary if we can infer public_id
+        try {
+            const cloudinary = require('../config/cloudinary');
+            // Extract filename without extension
+            const match = image.match(/\/([^\/]+)\.(jpg|jpeg|png|webp)$/i);
+            if (match) {
+                const filename = match[1];
+                // folder name should follow upload middleware: folderPrefix + '/' + sanitized room.code
+                const folderName = (room.code || '').toString().trim().replace(/\s+/g, '-').toLowerCase();
+                const publicId = `${'grand-hotel/rooms'}/${folderName}/${filename}`;
+                try {
+                    await cloudinary.uploader.destroy(publicId);
+                } catch (err) {
+                    console.warn('Failed to delete image from Cloudinary', err.message || err);
+                }
+            }
+        } catch (err) {
+            console.warn('Cloudinary delete skipped or failed', err.message || err);
+        }
+
+        // Create activity
+        try {
+            const activity = await RoomActivity.create({
+                room: roomId,
+                user: req.user?._id,
+                type: 'image_delete',
+                message: `Xóa ảnh cho phòng: ${image}`,
+                meta: { image },
+                ip: req.ip,
+                userAgent: req.headers['user-agent']
+            });
+            chatController.emit && chatController.emit('room_activity', { room: roomId, activity });
+        } catch (e) {
+            console.error('Failed to create room activity for image delete', e);
+        }
+
+        const populated = await Room.findById(roomId).populate('roomType').populate('hotel');
+        return res.status(200).json({ message: 'Image removed', data: populated });
+    } catch (error) {
+        return res.status(400).json({ message: error.message });
+    }
+};
+
 exports.deleteRoom = async (req, res) => {
     const roomId = req.params.id;
     try {
