@@ -35,6 +35,7 @@ const chatRoutes = require('./routes/chat.routes');
 const { authenticateSocket } = require('./middlewares/socketAuth.middleware');
 const { handleSocketConnection } = require('./controllers/socketController');
 const voucherRoutes = require('./routes/voucher.routes');
+const staffCalendarRoutes = require('./routes/staffCalendar.routes');
 
 
 
@@ -88,6 +89,7 @@ app.use('/api/favorites', favoriteRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 app.use('/api', chatRoutes);
 app.use('/api/vouchers', voucherRoutes);
+app.use('/api/staff/calendar', staffCalendarRoutes);
 // Socket.IO authentication middleware
 io.use(authenticateSocket);
 
