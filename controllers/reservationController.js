@@ -62,6 +62,21 @@ exports.createReservation = async (req, res) => {
         let totalPrice = 0;
         const detailsToInsert = [];
         
+        // Calculate number of nights from checkInDate and checkOutDate
+        const msPerDay = 1000 * 60 * 60 * 24;
+        const checkIn = new Date(checkInDate);
+        const checkOut = new Date(checkOutDate);
+        const nights = Math.max(1, Math.round((checkOut - checkIn) / msPerDay));
+        
+        console.log('[CREATE_RESERVATION] Calculating total price:', {
+            checkInDate: checkInDate,
+            checkOutDate: checkOutDate,
+            checkIn: checkIn.toISOString(),
+            checkOut: checkOut.toISOString(),
+            nights: nights,
+            msPerDay: msPerDay
+        });
+        
         for (const item of rooms) {
             const roomType = await RoomType.findById(item.roomTypeId);
             if (!roomType) {
@@ -70,7 +85,18 @@ exports.createReservation = async (req, res) => {
 
             const qty = Number(item.quantity || 1);
             const roomBase = Number(roomType.basePrice || 0);
-            let detailTotal = roomBase * qty;
+            // Calculate total price: basePrice * quantity * nights
+            let detailTotal = roomBase * qty * nights;
+            
+            console.log('[CREATE_RESERVATION] Room detail calculation:', {
+                roomTypeId: item.roomTypeId,
+                roomTypeName: roomType.name,
+                roomBase: roomBase,
+                quantity: qty,
+                nights: nights,
+                roomSubtotal: roomBase * qty * nights,
+                detailTotalBeforeServices: detailTotal
+            });
 
             const serviceEntries = [];
             if (Array.isArray(item.services)) {
@@ -79,12 +105,24 @@ exports.createReservation = async (req, res) => {
                     if (!serv) continue;
                     const sqty = Math.max(1, Number(s.quantity || 1));
                     // Use Service.basePrice defined in serviceModel
-                    detailTotal += Number(serv.basePrice || 0) * sqty; 
+                    const servicePrice = Number(serv.basePrice || 0) * sqty;
+                    detailTotal += servicePrice; 
                     serviceEntries.push({ service: serv._id, quantity: sqty });
+                    console.log('[CREATE_RESERVATION] Service added:', {
+                        serviceId: s.serviceId,
+                        serviceName: serv.name,
+                        serviceBasePrice: serv.basePrice,
+                        serviceQuantity: sqty,
+                        serviceTotal: servicePrice
+                    });
                 }
             }
 
             totalPrice += detailTotal;
+            console.log('[CREATE_RESERVATION] Detail total after services:', {
+                detailTotal: detailTotal,
+                runningTotalPrice: totalPrice
+            });
 
             detailsToInsert.push({
                 roomType: roomType._id,
@@ -99,10 +137,32 @@ exports.createReservation = async (req, res) => {
         // (Optional) Apply voucher logic...
 
         // --- BƯỚC 2: XÁC ĐỊNH SỐ TIỀN THANH TOÁN YÊU CẦU ---
+        // Validate totalPrice before proceeding
+        if (totalPrice <= 0) {
+            console.error('[CREATE_RESERVATION] ERROR: Invalid totalPrice calculated:', {
+                totalPrice: totalPrice,
+                nights: nights,
+                roomsCount: rooms.length
+            });
+            return res.status(400).json({ 
+                message: 'Invalid total price calculated. Please check room prices and number of nights.' 
+            });
+        }
+        
         const DEPOSIT_PERCENTAGE = 0.5; // 50%
         const requiredDeposit = Math.ceil(totalPrice * DEPOSIT_PERCENTAGE);
         
         let amountToPay = isFullPayment ? totalPrice : requiredDeposit;
+        
+        console.log('[CREATE_RESERVATION] Payment calculation:', {
+            totalPrice: totalPrice,
+            nights: nights,
+            DEPOSIT_PERCENTAGE: DEPOSIT_PERCENTAGE,
+            requiredDeposit: requiredDeposit,
+            isFullPayment: isFullPayment,
+            amountToPay: amountToPay,
+            calculationFormula: 'totalPrice = basePrice * quantity * nights + services'
+        });
 
         // --- BƯỚC 3: TẠO RESERVATION ---
         const reservation = await Reservation.create({
@@ -115,12 +175,40 @@ exports.createReservation = async (req, res) => {
         });
 
         // --- BƯỚC 4: TẠO PAYMENT ---
+        // Double-check values before creating payment
+        console.log('[CREATE_RESERVATION] Creating payment with values:', {
+            reservationId: reservation._id,
+            totalPrice: totalPrice,
+            depositAmount: requiredDeposit,
+            nights: nights,
+            validation: {
+                totalPriceIsValid: totalPrice > 0,
+                depositAmountIsValid: requiredDeposit > 0,
+                depositIsHalfOfTotal: Math.abs(requiredDeposit - (totalPrice * 0.5)) < 1
+            }
+        });
+        
         const payment = await Payment.create({
             reservation: reservation._id,
             totalPrice,
             depositAmount: requiredDeposit, // Lưu 50% tổng giá trị
             paymentStatus: 'unpaid',
             paidAmount: 0
+        });
+        
+        console.log('[CREATE_RESERVATION] Payment created successfully:', {
+            paymentId: payment._id,
+            totalPrice: payment.totalPrice,
+            depositAmount: payment.depositAmount,
+            paymentStatus: payment.paymentStatus,
+            verification: {
+                storedTotalPrice: payment.totalPrice,
+                expectedTotalPrice: totalPrice,
+                match: payment.totalPrice === totalPrice,
+                storedDeposit: payment.depositAmount,
+                expectedDeposit: requiredDeposit,
+                depositMatch: payment.depositAmount === requiredDeposit
+            }
         });
 
         // --- BƯỚC 5: TẠO RESERVATION DETAILS ---
@@ -1021,6 +1109,17 @@ exports.selectPaymentOption = async (req, res) => {
         }
 
         const payment = reservation.payment;
+        
+        console.log('[PAYMENT_OPTION] Payment data from database:', {
+            paymentId: payment._id,
+            totalPrice: payment.totalPrice,
+            depositAmount: payment.depositAmount,
+            paidAmount: payment.paidAmount,
+            paymentStatus: payment.paymentStatus,
+            reservationStatus: reservation.status,
+            checkInDate: reservation.checkInDate,
+            checkOutDate: reservation.checkOutDate
+        });
 
         // Chỉ cho phép thanh toán khi reservation đã được approve
         if (reservation.status !== 'approved') {
@@ -1036,11 +1135,24 @@ exports.selectPaymentOption = async (req, res) => {
             // Nếu đã đặt cọc, chỉ tính phần còn lại
             if (payment.paymentStatus === 'deposit_paid') {
                 amountToPay = payment.totalPrice - payment.depositAmount;
+                console.log('[PAYMENT_OPTION] Full payment (after deposit):', {
+                    totalPrice: payment.totalPrice,
+                    depositAmount: payment.depositAmount,
+                    amountToPay: amountToPay
+                });
             } else {
                 amountToPay = payment.totalPrice;
+                console.log('[PAYMENT_OPTION] Full payment (no deposit yet):', {
+                    totalPrice: payment.totalPrice,
+                    amountToPay: amountToPay
+                });
             }
         } else if (paymentType === 'deposit') {
             amountToPay = payment.depositAmount;
+            console.log('[PAYMENT_OPTION] Deposit payment:', {
+                depositAmount: payment.depositAmount,
+                amountToPay: amountToPay
+            });
         }
 
         // Kiểm tra xem đã thanh toán chưa
@@ -1054,24 +1166,36 @@ exports.selectPaymentOption = async (req, res) => {
 
         // Sử dụng ID đơn giản để tránh lỗi URL encoding
         const transferContent = reservation._id.toString().slice(-6); // Chỉ lấy 6 ký tự cuối
+        
+        console.log('[PAYMENT_OPTION] Generating QR code:', {
+            amountToPay: amountToPay,
+            transferContent: transferContent,
+            bankCode: process.env.MY_BANK_CODE,
+            accountNumber: process.env.MY_ACCOUNT_NUMBER
+        });
+        
         const vietQRLink = await generateVietQR(
             process.env.MY_BANK_CODE, 
             process.env.MY_ACCOUNT_NUMBER, 
             amountToPay, 
             transferContent 
         );
+        
+        const responseData = {
+            paymentType: paymentType,
+            requiredAmount: amountToPay,
+            vietQRLink: vietQRLink,
+            reservationTotal: payment.totalPrice,
+            depositAmount: payment.depositAmount,
+            paidAmount: payment.paidAmount,
+            remainingAmount: payment.totalPrice - payment.paidAmount
+        };
+        
+        console.log('[PAYMENT_OPTION] Response data:', responseData);
 
         return res.status(200).json({
             message: 'Payment QR code generated successfully.',
-            paymentInfo: {
-                paymentType: paymentType,
-                requiredAmount: amountToPay,
-                vietQRLink: vietQRLink,
-                reservationTotal: payment.totalPrice,
-                depositAmount: payment.depositAmount,
-                paidAmount: payment.paidAmount,
-                remainingAmount: payment.totalPrice - payment.paidAmount
-            }
+            paymentInfo: responseData
         });
 
     } catch (error) {
