@@ -5,10 +5,12 @@ const { protect } = require('../middlewares/auth.middleware'); // middleware aut
 
 // Tất cả route voucher đều require admin
 router.post('/', protect, voucherController.createVoucher);
-router.get('/', protect, voucherController.getVouchers);
+router.get('/', voucherController.getVouchers);
 router.get('/:id', protect, voucherController.getVoucherById);
 router.put('/:id', protect, voucherController.updateVoucher);
 router.delete('/:id', protect, voucherController.deleteVoucher);
 router.patch('/:id/lock', protect, voucherController.toggleLockVoucher);
+// Lấy voucher theo code
+router.get('/code/:code', protect, voucherController.getVoucherByCode);
 
 module.exports = router;

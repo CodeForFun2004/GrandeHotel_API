@@ -1,3 +1,7 @@
+// services/voucher.service.js
+const Voucher = require('../models/voucher.model');
+const Reservation = require('../models/reservationModel'); // đúng tên file model của bạn
+
 async function applyVoucherIfValid({
   voucherCode,
   hotelId,
@@ -44,6 +48,15 @@ async function applyVoucherIfValid({
 
   // Check phạm vi áp dụng khách sạn
   if (voucher.scope === 'multi-hotel') {
+    if (!hotelId) {
+      return {
+        voucher: null,
+        discountAmount: 0,
+        finalTotalPrice: totalPrice,
+        message: 'Thiếu thông tin khách sạn để áp dụng voucher.'
+      };
+    }
+
     const isAllowed = voucher.hotelIds.some(
       (hid) => hid.toString() === hotelId.toString()
     );
@@ -63,12 +76,12 @@ async function applyVoucherIfValid({
       voucher: null,
       discountAmount: 0,
       finalTotalPrice: totalPrice,
-      message: `Đơn đặt phòng chưa đạt giá trị tối thiểu để áp dụng voucher.`
+      message: 'Đơn đặt phòng chưa đạt giá trị tối thiểu để áp dụng voucher.'
     };
   }
 
   // Check số lượt dùng global
-  if (voucher.maxUsageGlobal > 0) {
+  if (voucher.maxUsageGlobal && voucher.maxUsageGlobal > 0) {
     const usedGlobal = await Reservation.countDocuments({
       voucher: voucher._id,
       status: { $nin: ['canceled', 'rejected'] }
@@ -85,7 +98,7 @@ async function applyVoucherIfValid({
   }
 
   // Check số lượt dùng theo user
-  if (voucher.maxUsagePerUser > 0 && customerId) {
+  if (voucher.maxUsagePerUser && voucher.maxUsagePerUser > 0 && customerId) {
     const usedByUser = await Reservation.countDocuments({
       voucher: voucher._id,
       customer: customerId,
@@ -106,7 +119,7 @@ async function applyVoucherIfValid({
   let discountAmount = 0;
   if (voucher.discountType === 'percent') {
     discountAmount = Math.round((totalPrice * voucher.discountValue) / 100);
-    if (voucher.maxDiscount > 0) {
+    if (voucher.maxDiscount && voucher.maxDiscount > 0) {
       discountAmount = Math.min(discountAmount, voucher.maxDiscount);
     }
   } else if (voucher.discountType === 'fixed') {
@@ -123,3 +136,8 @@ async function applyVoucherIfValid({
     message: null
   };
 }
+
+// 👇 Quan trọng: phải export đúng kiểu này
+module.exports = {
+  applyVoucherIfValid
+};
