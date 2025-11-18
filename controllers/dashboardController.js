@@ -346,6 +346,7 @@ module.exports = {
   confirmCheckout,
   addServiceToRoomInStay,
   listHotelServices,
+  listMyHotelServices,
   verifyCheckoutPayment
 };
 
@@ -1512,6 +1513,23 @@ async function listHotelServices(req, res) {
     return res.json({ services });
   } catch (error) {
     console.error('Error listing hotel services:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
+
+// @desc    List services for the authenticated user's hotel
+// @route   GET /api/dashboard/hotels/services
+// @access  Private (Staff/Manager/Admin) - requires user.hotelId to be set
+async function listMyHotelServices(req, res) {
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ message: 'Không có người dùng' });
+    const hotelId = user.hotelId || user.storeId || (user.hotel && (user.hotel._id || user.hotel.id));
+    if (!hotelId) return res.status(403).json({ message: 'Không có hotelId gán cho người dùng' });
+    const services = await Service.find({ hotel: hotelId }).select('_id name description basePrice');
+    return res.json({ services });
+  } catch (error) {
+    console.error('Error listing my hotel services:', error);
     res.status(500).json({ message: 'Server error' });
   }
 }

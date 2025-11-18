@@ -16,6 +16,7 @@ const {
   confirmCheckout,
   addServiceToRoomInStay,
   listHotelServices,
+  listMyHotelServices,
   verifyCheckoutPayment
 } = require('../controllers/dashboardController');
 
@@ -54,5 +55,7 @@ router.post('/stays/:stayId/rooms', protect, isStaff, async (req, res, next) => 
   } catch (e) { next(e); }
 });
 router.get('/hotels/:hotelId/services', protect, isStaff, listHotelServices);
+// Route to get services for the authenticated user's hotel (manager or staff)
+router.get('/hotels/services', protect, listMyHotelServices);
 
 module.exports = router;

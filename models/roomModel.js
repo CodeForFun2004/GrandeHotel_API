@@ -6,6 +6,7 @@ const roomSchema = new mongoose.Schema({
     roomNumber: { type: String, required: true },
     status: { type: String, enum: ['Reserved', 'Available', 'Maintenance','Cleaning','Occupied'], default: 'Available' },
     description: String,
+    services: [String],
     pricePerNight: { type: Number, required: true },
     images: [String],
     code: { type: String, required: true } // Unique code for room
