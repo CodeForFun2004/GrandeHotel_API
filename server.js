@@ -32,6 +32,7 @@ const chatbotRoutes = require('./routes/chatbot.routes');
 const chatRoutes = require('./routes/chat.routes');
 const { authenticateSocket } = require('./middlewares/socketAuth.middleware');
 const { handleSocketConnection } = require('./controllers/socketController');
+const voucherRoutes = require('./routes/voucher.routes');
 
 
 
@@ -82,7 +83,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/favorites', favoriteRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 app.use('/api', chatRoutes);
-
+app.use('/api/vouchers', voucherRoutes);
 // Socket.IO authentication middleware
 io.use(authenticateSocket);
 

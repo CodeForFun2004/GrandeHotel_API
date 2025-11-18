@@ -13,6 +13,9 @@ const Room = require('../models/roomModel');
 
 const Conversation = require('../models/conversation');
 
+const { applyVoucherIfValid } = require('../services/voucher.service');
+const Voucher = require('../models/voucher.model');
+
 // const Voucher = require('../models/voucherModel'); // Nếu có
 
 // Assuming you have dotenv or similar setup for environment variables
@@ -32,250 +35,306 @@ const { generateVietQR } = require("../services/payment.service");
 
 // [1] TẠO ĐƠN ĐẶT PHÒNG
 exports.createReservation = async (req, res) => {
+  try {
+    const {
+      hotelId,
+      // customerId is ignored; we take customer from the authenticated token
+      checkInDate,
+      checkOutDate,
+      numberOfGuests,
+      rooms, // array of { roomTypeId, quantity, services }
+      voucherCode,
+      isFullPayment // true nếu khách chọn thanh toán 100%, false nếu thanh toán cọc
+    } = req.body;
+
+    // Business rule: must be logged in to create a reservation
+    const authUser = req.user;
+    if (!authUser || !authUser._id) {
+      return res.status(401).json({ message: 'Authentication required to create reservation.' });
+    }
+
+    // Basic validation
+    if (!hotelId || !checkInDate || !checkOutDate || !rooms || rooms.length === 0) {
+      return res.status(400).json({ message: 'Missing required reservation information.' });
+    }
+
+    // Always take customer from token
+    const finalCustomerId = authUser._id;
+
+    // --- BƯỚC 1: TÍNH TOÁN TỔNG GIÁ GỐC ---
+    let totalPrice = 0;
+    const detailsToInsert = [];
+
+    // Calculate number of nights from checkInDate and checkOutDate
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const checkIn = new Date(checkInDate);
+    const checkOut = new Date(checkOutDate);
+    const nights = Math.max(1, Math.round((checkOut - checkIn) / msPerDay));
+
+    console.log('[CREATE_RESERVATION] Calculating total price:', {
+      checkInDate: checkInDate,
+      checkOutDate: checkOutDate,
+      checkIn: checkIn.toISOString(),
+      checkOut: checkOut.toISOString(),
+      nights: nights,
+      msPerDay: msPerDay
+    });
+
+    for (const item of rooms) {
+      const roomType = await RoomType.findById(item.roomTypeId);
+      if (!roomType) {
+        return res.status(404).json({ message: `Room type ${item.roomTypeId} not found.` });
+      }
+
+      const qty = Number(item.quantity || 1);
+      const roomBase = Number(roomType.basePrice || 0);
+      // Calculate total price: basePrice * quantity * nights
+      let detailTotal = roomBase * qty * nights;
+
+      console.log('[CREATE_RESERVATION] Room detail calculation:', {
+        roomTypeId: item.roomTypeId,
+        roomTypeName: roomType.name,
+        roomBase: roomBase,
+        quantity: qty,
+        nights: nights,
+        roomSubtotal: roomBase * qty * nights,
+        detailTotalBeforeServices: detailTotal
+      });
+
+      const serviceEntries = [];
+      if (Array.isArray(item.services)) {
+        for (const s of item.services) {
+          const serv = await Service.findById(s.serviceId);
+          if (!serv) continue;
+          const sqty = Math.max(1, Number(s.quantity || 1));
+          // Use Service.basePrice defined in serviceModel
+          const servicePrice = Number(serv.basePrice || 0) * sqty;
+          detailTotal += servicePrice;
+          serviceEntries.push({ service: serv._id, quantity: sqty });
+          console.log('[CREATE_RESERVATION] Service added:', {
+            serviceId: s.serviceId,
+            serviceName: serv.name,
+            serviceBasePrice: serv.basePrice,
+            serviceQuantity: sqty,
+            serviceTotal: servicePrice
+          });
+        }
+      }
+
+      totalPrice += detailTotal;
+      console.log('[CREATE_RESERVATION] Detail total after services:', {
+        detailTotal: detailTotal,
+        runningTotalPrice: totalPrice
+      });
+
+      detailsToInsert.push({
+        roomType: roomType._id,
+        quantity: qty,
+        adults: Number(item.adults ?? 1),
+        children: Number(item.children ?? 0),
+        infants: Number(item.infants ?? 0),
+        services: serviceEntries
+      });
+    }
+
+    // --- Validate tổng giá gốc ---
+    if (totalPrice <= 0) {
+      console.error('[CREATE_RESERVATION] ERROR: Invalid totalPrice calculated:', {
+        totalPrice: totalPrice,
+        nights: nights,
+        roomsCount: rooms.length
+      });
+      return res.status(400).json({
+        message: 'Invalid total price calculated. Please check room prices and number of nights.'
+      });
+    }
+
+    // --- BƯỚC 1.5: ÁP DỤNG VOUCHER (NẾU CÓ) ---
+    let discountAmount = 0;
+    let finalTotalPrice = totalPrice;
+    let appliedVoucher = null;
+
+    if (voucherCode) {
+      const result = await applyVoucherIfValid({
+        voucherCode,
+        hotelId,
+        customerId: finalCustomerId,
+        totalPrice
+      });
+
+      // Nếu có message lỗi (voucher không tồn tại / hết hạn / khóa / sai khách sạn / minValue / hết lượt...)
+      if (result.message) {
+        return res.status(400).json({ message: result.message });
+      }
+
+      appliedVoucher = result.voucher;
+      discountAmount = result.discountAmount;
+      finalTotalPrice = result.finalTotalPrice;
+    }
+
+    // Guard: tránh giá sau giảm <= 0 (tùy business, ở đây mình ép = 1)
+    if (finalTotalPrice <= 0) {
+      console.warn('[CREATE_RESERVATION] finalTotalPrice <= 0 after voucher, forcing to 1', {
+        totalPrice,
+        discountAmount,
+        finalTotalPrice
+      });
+      finalTotalPrice = 1;
+    }
+
+    // --- BƯỚC 2: XÁC ĐỊNH SỐ TIỀN THANH TOÁN (DỰA TRÊN GIÁ SAU GIẢM) ---
+    const DEPOSIT_PERCENTAGE = 0.5; // 50%
+    const requiredDeposit = Math.ceil(finalTotalPrice * DEPOSIT_PERCENTAGE);
+
+    let amountToPay = isFullPayment ? finalTotalPrice : requiredDeposit;
+
+    console.log('[CREATE_RESERVATION] Payment calculation:', {
+      totalPriceOriginal: totalPrice,
+      discountAmount,
+      finalTotalPrice,
+      nights: nights,
+      DEPOSIT_PERCENTAGE: DEPOSIT_PERCENTAGE,
+      requiredDeposit: requiredDeposit,
+      isFullPayment: isFullPayment,
+      amountToPay: amountToPay,
+      calculationFormula: 'finalTotalPrice = totalPrice - discountAmount'
+    });
+
+    // --- BƯỚC 3: TẠO RESERVATION ---
+    const reservationPayload = {
+      hotel: hotelId,
+      customer: finalCustomerId,
+      checkInDate,
+      checkOutDate,
+      numberOfGuests,
+      status: 'pending'
+    };
+
+    // Nếu bạn đã thêm các field voucher vào Reservation model thì gắn thêm:
+    if (appliedVoucher) {
+      reservationPayload.voucher = appliedVoucher._id;
+      reservationPayload.voucherCodeSnapshot = appliedVoucher.code;
+      reservationPayload.discountAmount = discountAmount;
+      reservationPayload.finalTotalPrice = finalTotalPrice;
+    } else {
+      // optional: vẫn lưu finalTotalPrice = totalPrice nếu không có voucher
+      reservationPayload.finalTotalPrice = finalTotalPrice;
+      reservationPayload.discountAmount = 0;
+      reservationPayload.voucherCodeSnapshot = null;
+    }
+
+    const reservation = await Reservation.create(reservationPayload);
+
+    // --- BƯỚC 4: TẠO PAYMENT ---
+    console.log('[CREATE_RESERVATION] Creating payment with values:', {
+      reservationId: reservation._id,
+      totalPriceOriginal: totalPrice,
+      discountAmount,
+      finalTotalPrice,
+      depositAmount: requiredDeposit,
+      nights: nights,
+      validation: {
+        finalTotalPriceIsValid: finalTotalPrice > 0,
+        depositAmountIsValid: requiredDeposit > 0,
+        depositIsHalfOfFinal: Math.abs(requiredDeposit - (finalTotalPrice * 0.5)) < 2
+      }
+    });
+
+    const paymentPayload = {
+      reservation: reservation._id,
+      // dùng giá SAU GIẢM làm totalPrice để bám vào số tiền thực khách phải trả
+      totalPrice: finalTotalPrice,
+      depositAmount: requiredDeposit,
+      paymentStatus: 'unpaid',
+      paidAmount: 0
+    };
+
+    // Nếu Payment schema của bạn có cho thêm field gốc thì giữ:
+    // paymentPayload.originalTotalPrice = totalPrice;
+    // paymentPayload.discountAmount = discountAmount;
+
+    const payment = await Payment.create(paymentPayload);
+
+    console.log('[CREATE_RESERVATION] Payment created successfully:', {
+      paymentId: payment._id,
+      totalPrice: payment.totalPrice,
+      depositAmount: payment.depositAmount,
+      paymentStatus: payment.paymentStatus
+    });
+
+    // --- BƯỚC 5: TẠO RESERVATION DETAILS ---
+    console.log('[CREATE_RESERVATION] Creating reservation details...', {
+      reservationId: reservation._id,
+      detailsCount: detailsToInsert.length,
+      details: detailsToInsert.map(d => ({
+        roomType: d.roomType,
+        quantity: d.quantity
+      }))
+    });
+
+    const detailsWithReservation = detailsToInsert.map(d => ({
+      reservation: reservation._id,
+      ...d
+    }));
+    const insertedDetails = await ReservationDetail.insertMany(detailsWithReservation);
+
+    console.log('[CREATE_RESERVATION] Reservation details created:', {
+      insertedCount: insertedDetails.length,
+      detailIds: insertedDetails.map(d => d._id)
+    });
+
+    // --- BƯỚC 6: ALLOCATE ROOMS ---
+    let allocation = null;
     try {
-        const {
-            hotelId,
-            // customerId is ignored; we take customer from the authenticated token
-            checkInDate,
-            checkOutDate,
-            numberOfGuests,
-            rooms, // array of { roomTypeId, quantity, services }
-            voucherCode,
-            isFullPayment // true nếu khách chọn thanh toán 100%, false nếu thanh toán cọc
-        } = req.body;
+      console.log('[CREATE_RESERVATION] Starting room allocation...', {
+        reservationId: reservation._id,
+        hotelId: reservation.hotel
+      });
+      allocation = await allocateRoomsForReservation(reservation);
+      console.log('[CREATE_RESERVATION] Room allocation result:', allocation);
+    } catch (allocErr) {
+      console.error('[CREATE_RESERVATION] Allocation on creation failed:', {
+        error: allocErr.message,
+        stack: allocErr.stack,
+        reservationId: reservation._id
+      });
+    }
 
-        // Business rule: must be logged in to create a reservation
-        const authUser = req.user;
-        if (!authUser || !authUser._id) {
-            return res.status(401).json({ message: 'Authentication required to create reservation.' });
-        }
+    // --- BƯỚC 7: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
+    const transferContent = reservation._id.toString().slice(-6); // Chỉ lấy 6 ký tự cuối
+    const vietQRLink = await generateVietQR(
+      process.env.MY_BANK_CODE,
+      process.env.MY_ACCOUNT_NUMBER,
+      amountToPay,
+      transferContent
+    );
 
-        // Basic validation
-        if (!hotelId || !checkInDate || !checkOutDate || !rooms || rooms.length === 0) {
-            return res.status(400).json({ message: 'Missing required reservation information.' });
-        }
-
-        // Always take customer from token
-        const finalCustomerId = authUser._id;
-
-        // --- BƯỚC 1: TÍNH TOÁN TỔNG GIÁ ---
-        let totalPrice = 0;
-        const detailsToInsert = [];
-        
-        // Calculate number of nights from checkInDate and checkOutDate
-        const msPerDay = 1000 * 60 * 60 * 24;
-        const checkIn = new Date(checkInDate);
-        const checkOut = new Date(checkOutDate);
-        const nights = Math.max(1, Math.round((checkOut - checkIn) / msPerDay));
-        
-        console.log('[CREATE_RESERVATION] Calculating total price:', {
-            checkInDate: checkInDate,
-            checkOutDate: checkOutDate,
-            checkIn: checkIn.toISOString(),
-            checkOut: checkOut.toISOString(),
-            nights: nights,
-            msPerDay: msPerDay
-        });
-        
-        for (const item of rooms) {
-            const roomType = await RoomType.findById(item.roomTypeId);
-            if (!roomType) {
-                return res.status(404).json({ message: `Room type ${item.roomTypeId} not found.` });
-            }
-
-            const qty = Number(item.quantity || 1);
-            const roomBase = Number(roomType.basePrice || 0);
-            // Calculate total price: basePrice * quantity * nights
-            let detailTotal = roomBase * qty * nights;
-            
-            console.log('[CREATE_RESERVATION] Room detail calculation:', {
-                roomTypeId: item.roomTypeId,
-                roomTypeName: roomType.name,
-                roomBase: roomBase,
-                quantity: qty,
-                nights: nights,
-                roomSubtotal: roomBase * qty * nights,
-                detailTotalBeforeServices: detailTotal
-            });
-
-            const serviceEntries = [];
-            if (Array.isArray(item.services)) {
-                for (const s of item.services) {
-                    const serv = await Service.findById(s.serviceId);
-                    if (!serv) continue;
-                    const sqty = Math.max(1, Number(s.quantity || 1));
-                    // Use Service.basePrice defined in serviceModel
-                    const servicePrice = Number(serv.basePrice || 0) * sqty;
-                    detailTotal += servicePrice; 
-                    serviceEntries.push({ service: serv._id, quantity: sqty });
-                    console.log('[CREATE_RESERVATION] Service added:', {
-                        serviceId: s.serviceId,
-                        serviceName: serv.name,
-                        serviceBasePrice: serv.basePrice,
-                        serviceQuantity: sqty,
-                        serviceTotal: servicePrice
-                    });
-                }
-            }
-
-            totalPrice += detailTotal;
-            console.log('[CREATE_RESERVATION] Detail total after services:', {
-                detailTotal: detailTotal,
-                runningTotalPrice: totalPrice
-            });
-
-            detailsToInsert.push({
-                roomType: roomType._id,
-                quantity: qty,
-                adults: Number(item.adults ?? 1),
-                children: Number(item.children ?? 0),
-                infants: Number(item.infants ?? 0),
-                services: serviceEntries,
-            });
-        }
-        
-        // (Optional) Apply voucher logic...
-
-        // --- BƯỚC 2: XÁC ĐỊNH SỐ TIỀN THANH TOÁN YÊU CẦU ---
-        // Validate totalPrice before proceeding
-        if (totalPrice <= 0) {
-            console.error('[CREATE_RESERVATION] ERROR: Invalid totalPrice calculated:', {
-                totalPrice: totalPrice,
-                nights: nights,
-                roomsCount: rooms.length
-            });
-            return res.status(400).json({ 
-                message: 'Invalid total price calculated. Please check room prices and number of nights.' 
-            });
-        }
-        
-        const DEPOSIT_PERCENTAGE = 0.5; // 50%
-        const requiredDeposit = Math.ceil(totalPrice * DEPOSIT_PERCENTAGE);
-        
-        let amountToPay = isFullPayment ? totalPrice : requiredDeposit;
-        
-        console.log('[CREATE_RESERVATION] Payment calculation:', {
-            totalPrice: totalPrice,
-            nights: nights,
-            DEPOSIT_PERCENTAGE: DEPOSIT_PERCENTAGE,
-            requiredDeposit: requiredDeposit,
-            isFullPayment: isFullPayment,
-            amountToPay: amountToPay,
-            calculationFormula: 'totalPrice = basePrice * quantity * nights + services'
-        });
-
-        // --- BƯỚC 3: TẠO RESERVATION ---
-        const reservation = await Reservation.create({
-            hotel: hotelId,
-            customer: finalCustomerId,
-            checkInDate,
-            checkOutDate,
-            numberOfGuests,
-            status: 'pending', 
-        });
-
-        // --- BƯỚC 4: TẠO PAYMENT ---
-        // Double-check values before creating payment
-        console.log('[CREATE_RESERVATION] Creating payment with values:', {
-            reservationId: reservation._id,
-            totalPrice: totalPrice,
-            depositAmount: requiredDeposit,
-            nights: nights,
-            validation: {
-                totalPriceIsValid: totalPrice > 0,
-                depositAmountIsValid: requiredDeposit > 0,
-                depositIsHalfOfTotal: Math.abs(requiredDeposit - (totalPrice * 0.5)) < 1
-            }
-        });
-        
-        const payment = await Payment.create({
-            reservation: reservation._id,
-            totalPrice,
-            depositAmount: requiredDeposit, // Lưu 50% tổng giá trị
-            paymentStatus: 'unpaid',
-            paidAmount: 0
-        });
-        
-        console.log('[CREATE_RESERVATION] Payment created successfully:', {
-            paymentId: payment._id,
-            totalPrice: payment.totalPrice,
-            depositAmount: payment.depositAmount,
-            paymentStatus: payment.paymentStatus,
-            verification: {
-                storedTotalPrice: payment.totalPrice,
-                expectedTotalPrice: totalPrice,
-                match: payment.totalPrice === totalPrice,
-                storedDeposit: payment.depositAmount,
-                expectedDeposit: requiredDeposit,
-                depositMatch: payment.depositAmount === requiredDeposit
-            }
-        });
-
-        // --- BƯỚC 5: TẠO RESERVATION DETAILS ---
-        console.log('[CREATE_RESERVATION] Creating reservation details...', {
-            reservationId: reservation._id,
-            detailsCount: detailsToInsert.length,
-            details: detailsToInsert.map(d => ({
-                roomType: d.roomType,
-                quantity: d.quantity
-            }))
-        });
-        
-        const detailsWithReservation = detailsToInsert.map(d => ({ reservation: reservation._id, ...d }));
-        const insertedDetails = await ReservationDetail.insertMany(detailsWithReservation);
-        
-        console.log('[CREATE_RESERVATION] Reservation details created:', {
-            insertedCount: insertedDetails.length,
-            detailIds: insertedDetails.map(d => d._id)
-        });
-
-        // Allocate rooms immediately after reservation is created so reservedRooms is persisted
-        let allocation = null;
-        try {
-            console.log('[CREATE_RESERVATION] Starting room allocation...', {
-                reservationId: reservation._id,
-                hotelId: reservation.hotel
-            });
-            allocation = await allocateRoomsForReservation(reservation);
-            console.log('[CREATE_RESERVATION] Room allocation result:', allocation);
-        } catch (allocErr) {
-            console.error('[CREATE_RESERVATION] Allocation on creation failed:', {
-                error: allocErr.message,
-                stack: allocErr.stack,
-                reservationId: reservation._id
-            });
-        }
-        
-        // --- BƯỚC 6: TẠO LINK VIETQR CHO THANH TOÁN ĐỢT 1 ---
-         // Sử dụng ID đơn giản để tránh lỗi URL encoding
-         const transferContent = reservation._id.toString().slice(-6); // Chỉ lấy 6 ký tự cuối
-        const vietQRLink = await generateVietQR(
-            process.env.MY_BANK_CODE, 
-            process.env.MY_ACCOUNT_NUMBER, 
-            amountToPay, 
-             transferContent 
-        );
-
-    // Populate payment và customer vào reservation để trả về
-    await reservation.populate('payment');
+    // Populate customer để trả ra FE
     await reservation.populate('customer', 'fullname username email phone');
 
-        return res.status(201).json({
-            message: 'Reservation created successfully and is pending approval.',
-            reservation,
-            paymentInfo: {
-                requiredAmount: amountToPay,
-                vietQRLink: vietQRLink, // Trả về link QR để khách hàng thanh toán
-                isFullPaymentRequested: isFullPayment
-            },
-            allocation
-        });
-
-    } catch (error) {
-        console.error('Error creating reservation:', error);
-        res.status(500).json({ message: 'Internal server error.', error: error.message });
-    }
+    return res.status(201).json({
+      message: 'Reservation created successfully and is pending approval.',
+      reservation,
+      voucher: appliedVoucher
+        ? {
+            code: appliedVoucher.code,
+            discountAmount,
+            finalTotalPrice
+          }
+        : null,
+      paymentInfo: {
+        requiredAmount: amountToPay,
+        vietQRLink: vietQRLink,
+        isFullPaymentRequested: isFullPayment
+      },
+      allocation
+    });
+  } catch (error) {
+    console.error('Error creating reservation:', error);
+    res.status(500).json({ message: 'Internal server error.', error: error.message });
+  }
 };
+
 
 // [2] DUYỆT/HỦY ĐƠN ĐẶT PHÒNG (MANAGER/ADMIN)
 exports.approveReservation = async (req, res) => {
