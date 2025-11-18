@@ -356,7 +356,7 @@ module.exports = {
 // @access  Private (Staff/Manager/Admin)
 async function searchReservationsForCheckIn(req, res) {
   try {
-    const { query, checkInDate, todayOnly } = req.query;
+    const { query, checkInDate, todayOnly, room } = req.query;
 
   // Build base matcher: approved reservations that are not yet checked in/out
   const baseMatch = { status: 'approved', stayStatus: { $nin: ['checked_in', 'checked_out'] } };
@@ -367,6 +367,31 @@ async function searchReservationsForCheckIn(req, res) {
       const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
       const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
       baseMatch.checkInDate = { $gte: start, $lte: end };
+    }
+
+    // If caller passed a specific room (room number or room id), restrict to reservations
+    // that have that room reserved. This helps `staff -> go to checkin` flow which
+    // navigates with `?room=<roomNumber>` when reservation wasn't resolvable.
+    if (room && String(room).trim()) {
+      // Try to resolve room by id first, then by roomNumber
+      let roomDoc = null;
+      try {
+        if (/^[0-9a-fA-F]{24}$/.test(String(room).trim())) {
+          roomDoc = await Room.findById(String(room).trim()).select('_id roomNumber');
+        }
+      } catch (e) { roomDoc = null; }
+      if (!roomDoc) {
+        roomDoc = await Room.findOne({ roomNumber: String(room).trim() }).select('_id roomNumber');
+      }
+      if (!roomDoc) {
+        // No such room -> return empty result set
+        return res.json({ results: [] });
+      }
+      // Find reservation details that reference this room
+      const rDetails = await ReservationDetail.find({ reservedRooms: roomDoc._id }).select('reservation');
+      const resIds = rDetails.map(d => d.reservation).filter(Boolean);
+      if (!resIds || resIds.length === 0) return res.json({ results: [] });
+      baseMatch._id = { $in: resIds };
     }
 
     // Load candidates (approved reservations not yet checked in/out)
@@ -383,7 +408,7 @@ async function searchReservationsForCheckIn(req, res) {
     let filtered = reservations;
     if (query && String(query).trim()) {
       const q = String(query).trim().toLowerCase();
-      filtered = eligible.filter(r => {
+      filtered = reservations.filter(r => {
         const name = (r.customer?.fullname || '').toLowerCase();
         const phone = (r.customer?.phone || '').toLowerCase();
         const uname = (r.customer?.username || '').toLowerCase();
