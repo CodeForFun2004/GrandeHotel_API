@@ -24,15 +24,23 @@ const getDashboardStats = async (req, res) => {
     const totalRooms = await Room.countDocuments();
     const totalUsers = await User.countDocuments();
 
-    // Tính doanh thu tháng hiện tại (các reservation đã paid)
+    // Tính doanh thu tháng hiện tại (các reservation đã thanh toán đầy đủ)
     const currentMonth = new Date();
     currentMonth.setDate(1);
     currentMonth.setHours(0, 0, 0, 0);
 
     const totalRevenue = await Reservation.aggregate([
       {
+        $lookup: {
+          from: 'payments',
+          localField: '_id',
+          foreignField: 'reservation',
+          as: 'payment'
+        }
+      },
+      {
         $match: {
-          status: 'paid',
+          'payment.paymentStatus': 'fully_paid',
           createdAt: { $gte: currentMonth }
         }
       },
@@ -74,8 +82,16 @@ const getRevenueData = async (req, res) => {
       // Get revenue for this month
       const monthRevenue = await Reservation.aggregate([
         {
+          $lookup: {
+            from: 'payments',
+            localField: '_id',
+            foreignField: 'reservation',
+            as: 'payment'
+          }
+        },
+        {
           $match: {
-            status: 'paid',
+            'payment.paymentStatus': 'fully_paid',
             createdAt: {
               $gte: date,
               $lt: nextMonth
@@ -121,8 +137,16 @@ const getHotelPerformance = async (req, res) => {
 
     const hotels = await Reservation.aggregate([
       {
+        $lookup: {
+          from: 'payments',
+          localField: '_id',
+          foreignField: 'reservation',
+          as: 'payment'
+        }
+      },
+      {
         $match: {
-          status: 'paid',
+          'payment.paymentStatus': 'fully_paid',
           createdAt: { $gte: currentMonth }
         }
       },
