@@ -39,6 +39,9 @@ const getDashboardStats = async (req, res) => {
         }
       },
       {
+        $unwind: '$payment'  // ← UNWIND để flatten payment array
+      },
+      {
         $match: {
           'payment.paymentStatus': 'fully_paid',
           createdAt: { $gte: currentMonth }
@@ -47,7 +50,7 @@ const getDashboardStats = async (req, res) => {
       {
         $group: {
           _id: null,
-          total: { $sum: '$totalPrice' }
+          total: { $sum: '$payment.totalPrice' }
         }
       }
     ]);
@@ -90,6 +93,9 @@ const getRevenueData = async (req, res) => {
           }
         },
         {
+          $unwind: '$payment'  // ← UNWIND để flatten payment array
+        },
+        {
           $match: {
             'payment.paymentStatus': 'fully_paid',
             createdAt: {
@@ -101,7 +107,7 @@ const getRevenueData = async (req, res) => {
         {
           $group: {
             _id: null,
-            revenue: { $sum: '$totalPrice' },
+            revenue: { $sum: '$payment.totalPrice' },
             count: { $sum: 1 }
           }
         }
@@ -145,6 +151,9 @@ const getHotelPerformance = async (req, res) => {
         }
       },
       {
+        $unwind: '$payment'  // ← UNWIND để flatten payment array
+      },
+      {
         $match: {
           'payment.paymentStatus': 'fully_paid',
           createdAt: { $gte: currentMonth }
@@ -153,7 +162,7 @@ const getHotelPerformance = async (req, res) => {
       {
         $group: {
           _id: '$hotel',
-          revenue: { $sum: '$totalPrice' },
+          revenue: { $sum: '$payment.totalPrice' },
           bookings: { $sum: 1 }
         }
       },
