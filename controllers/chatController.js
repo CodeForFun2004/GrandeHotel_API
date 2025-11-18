@@ -12,6 +12,40 @@ const setSocketIO = (socketIO) => {
 
 module.exports.setSocketIO = setSocketIO;
 
+// Generic emit helper so other controllers can call chatController.emit(...)
+const emit = (event, payload) => {
+  try {
+    if (!io) {
+      console.warn('[chatController] emit called but io is not initialized', event);
+      return;
+    }
+    // Log a concise summary for debugging
+    try {
+      const roomId = payload && (payload.room || (payload.activity && payload.activity.room));
+      console.log(`[chatController] emitting event=${event}` + (roomId ? ` to room=${roomId}` : ' to all') );
+    } catch (e) {
+      // ignore logging errors
+    }
+
+    // Emit globally
+    io.emit(event, payload);
+
+    // If payload references a specific room, also emit to a room-specific channel
+    try {
+      const roomId = payload && (payload.room || (payload.activity && payload.activity.room));
+      if (roomId && io.to) {
+        io.to(`room_${roomId}`).emit(event, payload);
+      }
+    } catch (e) {
+      console.warn('[chatController] room-scoped emit failed', e && e.message ? e.message : e);
+    }
+  } catch (e) {
+    console.warn('[chatController] emit failed', e && e.message ? e.message : e);
+  }
+};
+
+module.exports.emit = emit;
+
 
 // Helper: Kiểm tra reservation có thể chat
 // Chat sẽ được phép từ khi approve cho tới khi checkout, không phụ thuộc vào check-in/check-out date

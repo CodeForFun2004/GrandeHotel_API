@@ -44,6 +44,15 @@ router.post('/checkout/:stayId/confirm', protect, isStaff, confirmCheckout);
 
 // Stay service management
 router.post('/stays/:stayId/rooms/:roomId/services', protect, isStaff, addServiceToRoomInStay);
+// Add a room to an existing stay (check-in staff)
+router.post('/stays/:stayId/rooms', protect, isStaff, async (req, res, next) => {
+  // forward to controller method implemented below
+  try {
+    const dashboardController = require('../controllers/dashboardController');
+    if (typeof dashboardController.addRoomToStay === 'function') return dashboardController.addRoomToStay(req, res, next);
+    return res.status(501).json({ message: 'Not implemented' });
+  } catch (e) { next(e); }
+});
 router.get('/hotels/:hotelId/services', protect, isStaff, listHotelServices);
 
 module.exports = router;

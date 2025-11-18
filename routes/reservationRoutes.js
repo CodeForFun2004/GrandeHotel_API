@@ -8,6 +8,8 @@ const { protect, isAdmin } = require('../middlewares/auth.middleware');
 
 // Minimal reservation creation: selects room types and quantities only (requires auth)
 router.post('/', protect, reservationController.createReservation);
+// Assign a specific room to an existing reservation (staff use)
+router.post('/:id/assign-room', protect, reservationController.assignRoom);
 
 // Secured routes (require authentication)
 router.get('/', reservationController.getAllReservations);
