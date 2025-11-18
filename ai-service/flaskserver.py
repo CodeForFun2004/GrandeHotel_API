@@ -12,13 +12,6 @@ from pymongo import MongoClient
 from PIL import Image
 import face_recognition
 
-# Fix encoding cho Windows console
-import sys
-if sys.platform == 'win32':
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
 # Load .env file nếu có
 try:
     from dotenv import load_dotenv
@@ -38,19 +31,18 @@ try:
         abs_path = os.path.abspath(env_path)
         if os.path.exists(abs_path):
             load_dotenv(abs_path)
-            print(f"[Config] Loaded .env from: {abs_path}")
+            print(f"[Config]  Loaded .env from: {abs_path}")
             loaded = True
             break
     
     if not loaded:
-        print(f"[Config] Warning: .env file not found in any of these locations:")
+        print(f"[Config]   .env file not found in any of these locations:")
         for env_path in env_paths:
             print(f"[Config]    - {os.path.abspath(env_path)}")
 except ImportError:
-    print("[Config] Warning: python-dotenv not installed, using system environment variables only")
-    print("[Config] To install: conda activate face310 && pip install python-dotenv")
+    print("[Config]   python-dotenv not installed, using system environment variables only")
 except Exception as e:
-    print(f"[Config] Warning: Could not load .env file: {e}")
+    print(f"[Config]   Warning: Could not load .env file: {e}")
     import traceback
     traceback.print_exc()
 
@@ -263,7 +255,7 @@ def load_all_user_encodings_from_db():
                     "photoFace": photo_url
                 })
                 success_count += 1
-                print(f"[DEBUG] ✅ Successfully loaded encoding for {username}")
+                print(f"[DEBUG]  Successfully loaded encoding for {username}")
             except Exception as e:
                 print(f"[DEBUG] Error processing image for {username}: {str(e)}")
                 continue
@@ -386,9 +378,9 @@ if __name__ == "__main__":
         # Test database connection trước khi start
         try:
             db = get_db_connection()
-            print("[Flask] Database connection test successful")
+            print("[Flask]  Database connection test successful")
         except Exception as db_error:
-            print(f"[Flask] Warning: Database connection test failed: {db_error}")
+            print(f"[Flask]   Warning: Database connection test failed: {db_error}")
             print("[Flask] Continuing anyway...")
         
         # Debug=False cho gần giống prod; khi dev có thể bật True để xem stacktrace
@@ -396,7 +388,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n[Flask] Server stopped by user")
     except Exception as e:
-        print(f"[Flask] FATAL ERROR: {e}")
+        print(f"[Flask]  FATAL ERROR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
