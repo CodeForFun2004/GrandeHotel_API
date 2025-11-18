@@ -25,6 +25,8 @@ const roomController = require('./controllers/roomController');
 const hotelRoutes = require('./routes/hotelRoutes');
 const hotelAdminRoutes = require('./routes/hotelAdminRoutes');
 const managerUserRoutes = require('./routes/managerUserRoutes');
+const managerHotelRoutes = require('./routes/managerHotelRoutes');
+const managerDashboardRoutes = require('./routes/managerDashboardRoutes');
 const contactRoutes = require('./routes/contact.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const favoriteRoutes = require('./routes/favoriteRoutes');
@@ -76,6 +78,8 @@ app.use('/api/rooms', roomRoutes);
 
 app.use('/api/admin/managers', managerUserRoutes);
 app.use('/api/admin/hotels', hotelAdminRoutes);
+app.use('/api/manager/hotel', managerHotelRoutes);
+app.use('/api/manager/dashboard', managerDashboardRoutes);
 
 app.use('/api/contacts', contactRoutes);
 app.use('/api/dashboard', dashboardRoutes);
