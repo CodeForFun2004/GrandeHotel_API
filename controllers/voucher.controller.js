@@ -2,6 +2,7 @@
 const Voucher = require('../models/voucher.model');
 const mongoose = require('mongoose');
 
+
 // Helper: check admin quyền
 function ensureAdmin(req, res) {
   const user = req.user;
@@ -92,7 +93,7 @@ exports.createVoucher = async (req, res) => {
 // [READ] Lấy danh sách voucher (admin xem)
 exports.getVouchers = async (req, res) => {
   try {
-    if (!ensureAdmin(req, res)) return;
+    // if (!ensureAdmin(req, res)) return;
 
     const {
       status,
@@ -177,6 +178,35 @@ exports.getVoucherById = async (req, res) => {
     res.status(500).json({ message: 'Internal server error.', error: error.message });
   }
 };
+
+// [READ] Get voucher by code (for realtime validation)
+exports.getVoucherByCode = async (req, res) => {
+  try {
+    const { code } = req.params;
+
+    if (!code) {
+      return res.status(400).json({ message: 'Voucher code is required.' });
+    }
+
+    const voucher = await Voucher.findOne({
+      code: code.trim().toUpperCase()
+    });
+
+    if (!voucher) {
+      return res.status(404).json({ message: 'Voucher not found.' });
+    }
+
+    return res.status(200).json(voucher);
+
+  } catch (error) {
+    console.error('[GET_VOUCHER_BY_CODE] Error:', error);
+    return res.status(500).json({ 
+      message: 'Internal server error.', 
+      error: error.message 
+    });
+  }
+};
+
 
 // [UPDATE] Admin chỉnh sửa voucher
 exports.updateVoucher = async (req, res) => {
