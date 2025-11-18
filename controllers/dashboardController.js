@@ -24,22 +24,33 @@ const getDashboardStats = async (req, res) => {
     const totalRooms = await Room.countDocuments();
     const totalUsers = await User.countDocuments();
 
-    // Tính doanh thu tháng hiện tại (các reservation đã paid)
+    // Tính doanh thu tháng hiện tại (các reservation đã thanh toán đầy đủ)
     const currentMonth = new Date();
     currentMonth.setDate(1);
     currentMonth.setHours(0, 0, 0, 0);
 
     const totalRevenue = await Reservation.aggregate([
       {
+        $lookup: {
+          from: 'payments',
+          localField: '_id',
+          foreignField: 'reservation',
+          as: 'payment'
+        }
+      },
+      {
+        $unwind: '$payment'  // ← UNWIND để flatten payment array
+      },
+      {
         $match: {
-          status: 'paid',
+          'payment.paymentStatus': 'fully_paid',
           createdAt: { $gte: currentMonth }
         }
       },
       {
         $group: {
           _id: null,
-          total: { $sum: '$totalPrice' }
+          total: { $sum: '$payment.totalPrice' }
         }
       }
     ]);
@@ -74,8 +85,19 @@ const getRevenueData = async (req, res) => {
       // Get revenue for this month
       const monthRevenue = await Reservation.aggregate([
         {
+          $lookup: {
+            from: 'payments',
+            localField: '_id',
+            foreignField: 'reservation',
+            as: 'payment'
+          }
+        },
+        {
+          $unwind: '$payment'  // ← UNWIND để flatten payment array
+        },
+        {
           $match: {
-            status: 'paid',
+            'payment.paymentStatus': 'fully_paid',
             createdAt: {
               $gte: date,
               $lt: nextMonth
@@ -85,7 +107,7 @@ const getRevenueData = async (req, res) => {
         {
           $group: {
             _id: null,
-            revenue: { $sum: '$totalPrice' },
+            revenue: { $sum: '$payment.totalPrice' },
             count: { $sum: 1 }
           }
         }
@@ -121,15 +143,26 @@ const getHotelPerformance = async (req, res) => {
 
     const hotels = await Reservation.aggregate([
       {
+        $lookup: {
+          from: 'payments',
+          localField: '_id',
+          foreignField: 'reservation',
+          as: 'payment'
+        }
+      },
+      {
+        $unwind: '$payment'  // ← UNWIND để flatten payment array
+      },
+      {
         $match: {
-          status: 'paid',
+          'payment.paymentStatus': 'fully_paid',
           createdAt: { $gte: currentMonth }
         }
       },
       {
         $group: {
           _id: '$hotel',
-          revenue: { $sum: '$totalPrice' },
+          revenue: { $sum: '$payment.totalPrice' },
           bookings: { $sum: 1 }
         }
       },
