@@ -3,7 +3,7 @@ const router = express.Router();
 const roomController = require('../controllers/roomController');
 const roomActivityController = require('../controllers/roomActivityController');
 
-const { protect, isAdmin, isHotelManager, isStaff } = require('../middlewares/auth.middleware');
+const { protect, isAdmin, isHotelManager, isHotelManagerOrAdmin, isStaff } = require('../middlewares/auth.middleware');
 const upload = require('../middlewares/upload.middleware');
 const Room = require('../models/roomModel');
 
@@ -13,9 +13,9 @@ const uploadRoomImage = upload({ folderPrefix: 'grand-hotel/rooms', model: Room,
 // Room Type Management Routes - global/shared (require auth, but for any user)
 router.get('/types', protect, roomController.getAllRoomTypes); // Any authenticated user can see room types
 router.get('/types/:id', protect, roomController.getRoomTypeById);
-router.post('/types', protect, isHotelManager, roomController.createRoomType); // Only managers can modify
-router.put('/types/:id', protect, isHotelManager, roomController.updateRoomType);
-router.delete('/types/:id', protect, isHotelManager, roomController.deleteRoomType);
+router.post('/types', protect, isHotelManagerOrAdmin, roomController.createRoomType); // Managers or admins can modify (no hotelId required for global resources)
+router.put('/types/:id', protect, isHotelManagerOrAdmin, roomController.updateRoomType);
+router.delete('/types/:id', protect, isHotelManagerOrAdmin, roomController.deleteRoomType);
 
 // Staff view: list rooms in their assigned hotel (must be placed BEFORE '/:id')
 router.get('/staff', protect, isStaff, roomController.getRoomsForStaff);

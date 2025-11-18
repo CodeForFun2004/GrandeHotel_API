@@ -59,6 +59,15 @@ const isHotelManager = (req, res, next) => {
   }
 };
 
+// Middleware for hotel manager without requiring hotelId (for global resources like RoomType)
+const isHotelManagerOrAdmin = (req, res, next) => {
+  if (req.user && (req.user.role === 'hotel-manager' || req.user.role === 'admin')) {
+    return next();
+  } else {
+    return res.status(403).json({ message: 'Truy cập bị từ chối: chỉ dành cho hotel-manager hoặc admin' });
+  }
+};
+
 const isCustomer = (req, res, next) => {
   if (req.user && req.user.role === 'customer') {
     return next();
@@ -67,4 +76,4 @@ const isCustomer = (req, res, next) => {
   }
 };
 
-module.exports = { protect, isAdmin, isStaff, isHotelManager, isCustomer };
+module.exports = { protect, isAdmin, isStaff, isHotelManager, isHotelManagerOrAdmin, isCustomer };
