@@ -1,0 +1,44 @@
+[
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Airport Shuttle",
+    "description": "Convenient airport pick-up and drop-off service operating 24/7.",
+    "basePrice": 350000
+  },
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Breakfast Buffet",
+    "description": "Daily international breakfast buffet including vegetarian options.",
+    "basePrice": 180000
+  },
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Spa & Massage",
+    "description": "Relaxing full-body massage provided by professional therapists.",
+    "basePrice": 550000
+  },
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Laundry Service",
+    "description": "Same-day laundry and ironing service for clothes and linens.",
+    "basePrice": 90000
+  },
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Gym Access",
+    "description": "Access to fully equipped fitness center with free bottled water.",
+    "basePrice": 0
+  },
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Room Cleaning",
+    "description": "Daily housekeeping and room cleaning service.",
+    "basePrice": 0
+  },
+  {
+    "hotel": "673abd12f93c2e45b81f0011",
+    "name": "Poolside Bar",
+    "description": "Refreshing drinks and light snacks served at the outdoor pool bar.",
+    "basePrice": 120000
+  }
+]

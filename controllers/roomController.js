@@ -306,6 +306,22 @@ exports.createRoom = async (req, res) => {
             images 
         } = req.body;
 
+        // Normalize status to match Room model enum values
+        let normalizedStatus;
+        try {
+            if (status) {
+                const s = String(status).toLowerCase();
+                if (['available', 'active'].includes(s)) normalizedStatus = 'Available';
+                else if (['reserved'].includes(s)) normalizedStatus = 'Reserved';
+                else if (['maintenance', 'under maintenance'].includes(s)) normalizedStatus = 'Maintenance';
+                else if (['cleaning'].includes(s)) normalizedStatus = 'Cleaning';
+                else if (['occupied'].includes(s)) normalizedStatus = 'Occupied';
+                else normalizedStatus = String(status);
+            }
+        } catch (e) {
+            normalizedStatus = status;
+        }
+
         // Get manager's hotel ID
         const hotelId = req.user?.hotelId || req.user?.storeId;
         if (!hotelId) {
@@ -380,7 +396,7 @@ exports.createRoom = async (req, res) => {
             roomType,
             hotel: hotelId,
             roomNumber,
-            status: status || 'Active',
+            status: normalizedStatus || 'Available',
             description,
             pricePerNight,
             capacity,
@@ -405,6 +421,25 @@ exports.createRoom = async (req, res) => {
         });
     }
 };  
+// @desc    Check if a room number (or code) already exists in manager's hotel
+// @route   GET /api/rooms/check-number?roomNumber=XXX
+// @access  Private (hotel manager)
+exports.checkRoomNumber = async (req, res) => {
+    try {
+        const { roomNumber, code } = req.query;
+        const searchNumber = (roomNumber || code || '').toString().trim();
+        if (!searchNumber) return res.status(400).json({ success: false, message: 'Missing roomNumber' });
+
+        const hotelId = req.user?.hotelId || req.user?.storeId;
+        if (!hotelId) return res.status(403).json({ success: false, message: 'Manager hotel ID not found' });
+
+        const found = await Room.findOne({ hotel: hotelId, $or: [{ roomNumber: new RegExp(`^${searchNumber}$`, 'i') }, { code: new RegExp(`^${searchNumber}$`, 'i') }] });
+        return res.status(200).json({ success: true, exists: !!found, data: found ? { id: found._id, roomNumber: found.roomNumber } : null });
+    } catch (error) {
+        console.error('Error checking room number:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
 exports.getAllRooms = async (req, res) => {
     try {
         // Get manager's hotel ID
@@ -1043,11 +1078,27 @@ exports.createAdminRoom = async (req, res) => {
             return res.status(404).json({ message: 'Hotel not found' });
         }
 
+        // Normalize admin-provided status
+        let normalizedStatusAdmin;
+        try {
+            if (status) {
+                const s = String(status).toLowerCase();
+                if (['available', 'active'].includes(s)) normalizedStatusAdmin = 'Available';
+                else if (['reserved'].includes(s)) normalizedStatusAdmin = 'Reserved';
+                else if (['maintenance', 'under maintenance'].includes(s)) normalizedStatusAdmin = 'Maintenance';
+                else if (['cleaning'].includes(s)) normalizedStatusAdmin = 'Cleaning';
+                else if (['occupied'].includes(s)) normalizedStatusAdmin = 'Occupied';
+                else normalizedStatusAdmin = String(status);
+            }
+        } catch (e) {
+            normalizedStatusAdmin = status;
+        }
+
         const room = new Room({
             roomType: roomType,
             hotel: hotel,
             roomNumber: roomNumber,
-            status: status || 'available',
+            status: normalizedStatusAdmin || 'Available',
             pricePerNight: pricePerNight,
             description: description
         });
@@ -1091,13 +1142,27 @@ exports.updateAdminRoom = async (req, res) => {
                         return res.status(403).json({ message: 'Access denied to update this room' });
                     }
                 } catch (e) {}
+        // Normalize status if provided
+        let normalizedStatusUpdate = status;
+        try {
+            if (status) {
+                const s = String(status).toLowerCase();
+                if (['available', 'active'].includes(s)) normalizedStatusUpdate = 'Available';
+                else if (['reserved'].includes(s)) normalizedStatusUpdate = 'Reserved';
+                else if (['maintenance', 'under maintenance'].includes(s)) normalizedStatusUpdate = 'Maintenance';
+                else if (['cleaning'].includes(s)) normalizedStatusUpdate = 'Cleaning';
+                else if (['occupied'].includes(s)) normalizedStatusUpdate = 'Occupied';
+                else normalizedStatusUpdate = status;
+            }
+        } catch (e) {}
+
         const room = await Room.findByIdAndUpdate(
             roomId,
             {
                 roomType: roomType,
                 hotel: hotel,
                 roomNumber: roomNumber,
-                status: status,
+                status: normalizedStatusUpdate,
                 description: description,
                 pricePerNight: pricePerNight
             },

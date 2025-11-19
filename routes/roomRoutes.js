@@ -20,6 +20,9 @@ router.delete('/types/:id', protect, isHotelManagerOrAdmin, roomController.delet
 // Staff view: list rooms in their assigned hotel (must be placed BEFORE '/:id')
 router.get('/staff', protect, isStaff, roomController.getRoomsForStaff);
 
+// Check room number uniqueness for manager's hotel
+router.get('/check-number', protect, isHotelManager, roomController.checkRoomNumber);
+
 // Public: list ALL rooms across hotels (no auth)
 router.get('/all', roomController.getAdminRooms);
 

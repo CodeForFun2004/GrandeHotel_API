@@ -5,6 +5,7 @@ const Reservation = require('../models/reservationModel');
 const ReservationDetail = require('../models/reservationDetailModel');
 const RoomType = require('../models/roomTypeModel');
 const Stay = require('../models/stayModel');
+const RoomActivity = require('../models/roomActivity');
 // Use the reservation-scoped Payment summary model for all payment state
 const ReservationPayment = require('../models/paymentModel');
 const Service = require('../models/serviceModel');
@@ -13,6 +14,7 @@ const Conversation = require('../models/conversation');
 const Message = require('../models/message');
 // VietQR generator reused for checkout payments
 const { generateVietQR } = require('../services/payment.service');
+const chatController = require('./chatController');
 
 // @desc    Lấy thống kê tổng quan dashboard
 // @route   GET /api/dashboard/stats
@@ -367,6 +369,7 @@ module.exports = {
   getBookingStatus,
   getUserStats,
   getRecentActivities,
+  addRoomToStay,
   searchReservationsForCheckIn,
   getReservationForCheckIn,
   confirmCheckIn,
@@ -376,6 +379,7 @@ module.exports = {
   confirmCheckout,
   addServiceToRoomInStay,
   listHotelServices,
+  listMyHotelServices,
   verifyCheckoutPayment
 };
 
@@ -386,7 +390,7 @@ module.exports = {
 // @access  Private (Staff/Manager/Admin)
 async function searchReservationsForCheckIn(req, res) {
   try {
-    const { query, checkInDate, todayOnly } = req.query;
+    const { query, checkInDate, todayOnly, room } = req.query;
 
   // Build base matcher: approved reservations that are not yet checked in/out
   const baseMatch = { status: 'approved', stayStatus: { $nin: ['checked_in', 'checked_out'] } };
@@ -399,21 +403,46 @@ async function searchReservationsForCheckIn(req, res) {
       baseMatch.checkInDate = { $gte: start, $lte: end };
     }
 
-  // Load candidates
+    // If caller passed a specific room (room number or room id), restrict to reservations
+    // that have that room reserved. This helps `staff -> go to checkin` flow which
+    // navigates with `?room=<roomNumber>` when reservation wasn't resolvable.
+    if (room && String(room).trim()) {
+      // Try to resolve room by id first, then by roomNumber
+      let roomDoc = null;
+      try {
+        if (/^[0-9a-fA-F]{24}$/.test(String(room).trim())) {
+          roomDoc = await Room.findById(String(room).trim()).select('_id roomNumber');
+        }
+      } catch (e) { roomDoc = null; }
+      if (!roomDoc) {
+        roomDoc = await Room.findOne({ roomNumber: String(room).trim() }).select('_id roomNumber');
+      }
+      if (!roomDoc) {
+        // No such room -> return empty result set
+        return res.json({ results: [] });
+      }
+      // Find reservation details that reference this room
+      const rDetails = await ReservationDetail.find({ reservedRooms: roomDoc._id }).select('reservation');
+      const resIds = rDetails.map(d => d.reservation).filter(Boolean);
+      if (!resIds || resIds.length === 0) return res.json({ results: [] });
+      baseMatch._id = { $in: resIds };
+    }
+
+    // Load candidates (approved reservations not yet checked in/out)
     const reservations = await Reservation.find(baseMatch)
       .populate('customer', 'fullname phone email username')
       .populate('hotel', 'name')
       .populate('payment')
-      .sort({ checkInDate: 1, createdAt: -1 });
+      .sort({ createdAt: -1 });
 
-    // Filter to eligible payment statuses only
-    const eligible = reservations.filter(r => ['deposit_paid', 'fully_paid'].includes(r.payment?.paymentStatus));
-
+    // NOTE: Previously we filtered reservations to only those with a payment
+    // status of deposit_paid/fully_paid. For staff search we want to show
+    // approved reservations regardless of payment status (minimal filter).
     // Optional text query across fullname, phone, username, reservation id
-    let filtered = eligible;
+    let filtered = reservations;
     if (query && String(query).trim()) {
       const q = String(query).trim().toLowerCase();
-      filtered = eligible.filter(r => {
+      filtered = reservations.filter(r => {
         const name = (r.customer?.fullname || '').toLowerCase();
         const phone = (r.customer?.phone || '').toLowerCase();
         const uname = (r.customer?.username || '').toLowerCase();
@@ -452,7 +481,8 @@ async function searchReservationsForCheckIn(req, res) {
 async function listActiveStaysForCheckout(req, res) {
   try {
     const { query } = req.query || {};
-    const stays = await Stay.find({ status: 'Checked in' })
+    // Include stays that are marked as Checked in OR those that have an actualCheckIn timestamp
+    const stays = await Stay.find({ $or: [{ status: 'Checked in' }, { actualCheckIn: { $exists: true, $ne: null } }] })
       .populate('reservation', 'checkInDate checkOutDate customer')
       .populate({ path: 'reservation.customer', select: 'fullname phone email' })
       .populate({ path: 'details.roomType', select: 'name basePrice' })
@@ -1416,6 +1446,95 @@ async function addServiceToRoomInStay(req, res) {
   }
 }
 
+// @desc    Add an existing room into an active stay (create a roomStay entry)
+// @route   POST /api/dashboard/stays/:stayId/rooms
+// @access  Private (Staff/Manager/Admin)
+async function addRoomToStay(req, res) {
+  try {
+    const { stayId } = req.params;
+    const { roomId, guests = [], services = [] } = req.body || {};
+
+    if (!roomId) return res.status(400).json({ message: 'roomId is required' });
+
+    const stay = await Stay.findById(stayId).populate('reservation', 'checkInDate checkOutDate').populate('hotel', 'name');
+    if (!stay) return res.status(404).json({ message: 'Stay not found' });
+    if (stay.status !== 'Checked in') return res.status(400).json({ message: 'Stay is not active for adding rooms' });
+
+    const room = await Room.findById(roomId).select('_id hotel roomType pricePerNight status roomNumber');
+    if (!room) return res.status(404).json({ message: 'Room not found' });
+    if (String(room.hotel) !== String(stay.hotel)) return res.status(400).json({ message: 'Room does not belong to this hotel' });
+
+    // Prevent adding a room that's already occupied or already part of this stay
+    if (room.status === 'Occupied') return res.status(400).json({ message: 'Room is already occupied' });
+    const alreadyInStay = stay.details.some(d => (Array.isArray(d.rooms) && d.rooms.some(r => String(r) === String(roomId))) || (Array.isArray(d.roomStays) && d.roomStays.some(rs => String(rs.room) === String(roomId))));
+    if (alreadyInStay) return res.status(400).json({ message: 'Room already belongs to this stay' });
+
+    // Normalize guests and services payload
+    const guestList = Array.isArray(guests) ? guests.map(g => ({ fullname: g.fullname || g.name || 'Guest', gender: g.gender || 'other', dateOfBirth: g.dateOfBirth || null, phone: g.phone || null })) : [];
+    const svcList = Array.isArray(services) ? services.map(s => {
+      if (!s) return null;
+      if (typeof s === 'string') return { service: s, quantity: 1 };
+      return { service: s.service || s.serviceId || null, quantity: Math.max(1, Number(s.quantity || 1)) };
+    }).filter(Boolean) : [];
+
+    // Compute nights for pricing using reservation window when available
+    const msPerDay = 1000 * 60 * 60 * 24;
+    let nights = 1;
+    if (stay.reservation && stay.reservation.checkInDate && stay.reservation.checkOutDate) {
+      try {
+        nights = Math.max(1, Math.round((new Date(stay.reservation.checkOutDate) - new Date(stay.reservation.checkInDate)) / msPerDay));
+      } catch (e) { nights = 1; }
+    }
+
+    const totalPrice = (Number(room.pricePerNight || 0) * nights) || 0;
+
+    // Find a matching detail by roomType, or create a new one
+    let detail = stay.details.find(d => String(d.roomType) === String(room.roomType));
+    if (detail) {
+      if (!Array.isArray(detail.rooms)) detail.rooms = [];
+      detail.rooms.push(room._id);
+      if (!Array.isArray(detail.roomStays)) detail.roomStays = [];
+      detail.roomStays.push({ room: room._id, guests: guestList, services: svcList, idVerification: null, notes: null, status: 'Checked in' });
+      detail.totalPrice = (Number(detail.totalPrice || 0) + totalPrice);
+    } else {
+      const newDetail = {
+        roomType: room.roomType,
+        rooms: [room._id],
+        services: [],
+        totalPrice: totalPrice,
+        notes: null,
+        roomStays: [{ room: room._id, guests: guestList, services: svcList, idVerification: null, notes: null, status: 'Checked in' }]
+      };
+      stay.details.push(newDetail);
+    }
+
+    stay.markModified('details');
+
+    // Mark room as Occupied
+    await Room.findByIdAndUpdate(room._id, { $set: { status: 'Occupied' } });
+
+    await stay.save();
+
+    // Create a RoomActivity record and emit
+    const activity = await RoomActivity.create({
+      room: room._id,
+      user: req.user?._id || null,
+      type: 'assignment',
+      message: `Room ${room.roomNumber} assigned to stay ${stay._id}`,
+      meta: { stay: stay._id },
+      ip: req.ip,
+      userAgent: req.get('user-agent')
+    });
+
+    try { chatController.emit('room_activity', { room: room._id, activity }); } catch (e) { console.warn('emit failed', e && e.message); }
+
+    return res.status(200).json({ message: 'Room added to stay', stay, activity });
+  } catch (error) {
+    console.error('Error adding room to stay:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
+  }
+}
+
 // @desc    List available services for a hotel (for selection in stay service additions)
 // @route   GET /api/dashboard/hotels/:hotelId/services
 // @access  Private (Staff/Manager/Admin)
@@ -1427,6 +1546,23 @@ async function listHotelServices(req, res) {
     return res.json({ services });
   } catch (error) {
     console.error('Error listing hotel services:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
+
+// @desc    List services for the authenticated user's hotel
+// @route   GET /api/dashboard/hotels/services
+// @access  Private (Staff/Manager/Admin) - requires user.hotelId to be set
+async function listMyHotelServices(req, res) {
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ message: 'Không có người dùng' });
+    const hotelId = user.hotelId || user.storeId || (user.hotel && (user.hotel._id || user.hotel.id));
+    if (!hotelId) return res.status(403).json({ message: 'Không có hotelId gán cho người dùng' });
+    const services = await Service.find({ hotel: hotelId }).select('_id name description basePrice');
+    return res.json({ services });
+  } catch (error) {
+    console.error('Error listing my hotel services:', error);
     res.status(500).json({ message: 'Server error' });
   }
 }

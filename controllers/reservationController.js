@@ -1361,3 +1361,113 @@ exports.deleteReservation = async (req, res) => {
         res.status(500).json({ message: 'Internal server error.', error: error.message });
     }
 };
+
+// POST /api/reservations/:id/assign-room
+// Body: { roomId: string, detailId?: string, status?: 'Reserved'|'Occupied' }
+exports.assignRoom = async (req, res) => {
+    try {
+        const reservationId = req.params.id;
+        const { roomId, detailId, status } = req.body || {};
+        const user = req.user;
+
+        if (!roomId) return res.status(400).json({ message: 'Missing roomId' });
+
+        const reservation = await Reservation.findById(reservationId);
+        if (!reservation) return res.status(404).json({ message: 'Reservation not found' });
+
+        // check hotel scoping for staff
+        try {
+            const userHotelId = user?.hotelId || user?.storeId;
+            if (userHotelId && reservation.hotel && reservation.hotel.toString() !== userHotelId.toString()) {
+                return res.status(403).json({ message: 'Access denied to this reservation' });
+            }
+        } catch (e) {}
+
+        const Room = require('../models/roomModel');
+        const room = await Room.findById(roomId);
+        if (!room) return res.status(404).json({ message: 'Room not found' });
+
+        // ensure same hotel
+        try {
+            const userHotelId = user?.hotelId || user?.storeId;
+            if (userHotelId && room.hotel && room.hotel.toString() !== userHotelId.toString()) {
+                return res.status(403).json({ message: 'Access denied to this room' });
+            }
+        } catch (e) {}
+
+        // Find a matching reservation detail or use provided one
+        let detail = null;
+        if (detailId) {
+            detail = await ReservationDetail.findById(detailId);
+        }
+        if (!detail) {
+            const details = await ReservationDetail.find({ reservation: reservationId });
+            // prefer same roomType
+            for (const d of details) {
+                if (d.roomType && room.roomType && d.roomType.toString() === room.roomType.toString()) {
+                    const reservedCount = Array.isArray(d.reservedRooms) ? d.reservedRooms.length : 0;
+                    if ((d.quantity || 0) > reservedCount) {
+                        detail = d;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!detail) {
+            // create a new reservation detail referencing the room's roomType
+            detail = new ReservationDetail({
+                reservation: reservationId,
+                roomType: room.roomType,
+                quantity: 1,
+                adults: 1,
+                reservedRooms: [room._id]
+            });
+            await detail.save();
+        } else {
+            // append room if not already present
+            detail.reservedRooms = detail.reservedRooms || [];
+            if (!detail.reservedRooms.find(r => r.toString() === room._id.toString())) {
+                detail.reservedRooms.push(room._id);
+            }
+            await detail.save();
+        }
+
+        // mark room status
+        try {
+            room.status = status || 'Reserved';
+            await room.save();
+        } catch (e) {
+            console.warn('Failed to update room status on assignRoom', e && e.message);
+        }
+
+        // create RoomActivity and emit
+        try {
+            const RoomActivity = require('../models/roomActivity');
+            const chatController = require('./chatController');
+            const activity = await RoomActivity.create({
+                room: room._id,
+                user: user?._id,
+                type: 'assign_room',
+                message: `Gán phòng ${room.roomNumber || room.code || room._id} vào đơn đặt phòng ${reservationId}`,
+                meta: { reservation: reservationId, room: room._id },
+                ip: req.ip,
+                userAgent: req.headers['user-agent']
+            });
+            chatController.emit && chatController.emit('room_activity', { room: room._id, activity });
+        } catch (e) {
+            console.error('Failed creating room activity on assignRoom', e && e.message);
+        }
+
+        // return updated reservation with details
+        const populated = await Reservation.findById(reservationId)
+            .populate('payment')
+            .populate('customer', 'fullname username email phone')
+            .populate({ path: 'details', populate: [{ path: 'roomType', select: 'name basePrice' }, { path: 'reservedRooms', model: 'Room', select: 'roomNumber code status' }] });
+
+        return res.status(200).json({ message: 'Room assigned to reservation', reservation: populated });
+    } catch (error) {
+        console.error('Error in assignRoom:', error);
+        return res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+};

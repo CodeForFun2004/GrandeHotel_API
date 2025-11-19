@@ -77,6 +77,36 @@ const handleSocketConnection = (io) => {
       }
     });
 
+    // Handle joining a room-specific channel for room activity updates
+    socket.on('join_room', async (data) => {
+      try {
+        const { roomId } = data || {};
+        if (!roomId) return socket.emit('error', { message: 'Missing roomId' });
+
+        // Optional: verify room belongs to user's hotel if user is staff/manager
+        try {
+          const Room = require('../models/roomModel');
+          const room = await Room.findById(roomId).select('hotel');
+          if (!room) return socket.emit('error', { message: 'Room not found' });
+          if (socket.user && socket.user.role && (socket.user.role === 'staff' || socket.user.role === 'manager')) {
+            if (room.hotel && socket.user.hotelId && room.hotel.toString() !== socket.user.hotelId.toString()) {
+              return socket.emit('error', { message: 'Access denied to room' });
+            }
+          }
+        } catch (e) {
+          // ignore verification failures and allow join attempt
+        }
+
+        const roomChannel = `room_${roomId}`;
+        socket.join(roomChannel);
+        console.log(`${socket.user.email} joined room channel: ${roomChannel}`);
+        socket.emit('joined_room', { roomId });
+      } catch (err) {
+        console.error('Error joining room channel:', err);
+        socket.emit('error', { message: 'Failed to join room channel' });
+      }
+    });
+
     // Handle leaving a conversation room
     socket.on('leave_conversation', (data) => {
       const { threadId } = data;
