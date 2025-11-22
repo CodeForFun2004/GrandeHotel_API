@@ -185,10 +185,10 @@ exports.getRevenueSeries = async (req, res) => {
     } else {
       // 7 days
       const fromDate = from ? new Date(from) : new Date();
-      fromDate.setDate(fromDate.getDate() - 6); // Last 7 days
+      fromDate.setDate(fromDate.getDate() - 29); // Last 7 days
       fromDate.setHours(0, 0, 0, 0);
 
-      for (let i = 0; i < 7; i++) {
+      for (let i = 0; i < 30; i++) {
         const date = new Date(fromDate);
         date.setDate(date.getDate() + i);
         const nextDay = new Date(date);
